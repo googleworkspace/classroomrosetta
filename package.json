@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "gulp": "^5.0.0",
+    "gulp-clean": "^0.4.0",
+    "gulp-replace": "^1.1.4"
+  }
+}

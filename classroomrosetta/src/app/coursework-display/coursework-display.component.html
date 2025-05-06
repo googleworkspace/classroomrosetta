@@ -1,0 +1,166 @@
+<!--
+ Copyright 2025 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<div class="coursework-container">
+
+  <div class="controls-header">
+    <mat-checkbox
+      class="select-all-checkbox"
+      [checked]="isAllSelected"
+      [indeterminate]="isIndeterminate"
+      (change)="toggleAllSelection()"
+      aria-label="Select all coursework items">
+      Select All Assignments
+    </mat-checkbox>
+
+    <app-classroom-multiselect
+      (selectionChange)="handleClassroomSelection($event)">
+    </app-classroom-multiselect>
+
+    <button
+      mat-raised-button
+      color="primary"
+      (click)="onSubmit()"
+      [disabled]="selectedClassroomIds.length === 0 || getSelectedAssignmentCount() === 0">
+      Submit Selected ({{ getSelectedAssignmentCount() }})
+    </button>
+  </div>
+
+  <mat-divider></mat-divider>
+
+  <div class="scrollable-content">
+    @if (groupedCoursework.length > 0) {
+      <mat-accordion multi="true">
+        @for (group of groupedCoursework; track trackByGroupTopic($index, group)) {
+          <mat-expansion-panel class="topic-panel" [expanded]="false">
+            <mat-expansion-panel-header>
+              <mat-panel-title class="topic-header">
+                <mat-checkbox
+                  class="topic-checkbox"
+                  [checked]="group.allSelected"
+                  [indeterminate]="group.indeterminate"
+                  (change)="toggleTopicSelection(group)"
+                  (click)="$event.stopPropagation()"
+                  [aria-label]="'Select all items in topic: ' + (group.topic || 'General')">
+                </mat-checkbox>
+                <span class="topic-title">{{ group.topic || 'General' }}</span>
+                <span class="item-count">({{ group.items.length }} item{{ group.items.length === 1 ? '' : 's' }})</span>
+              </mat-panel-title>
+            </mat-expansion-panel-header>
+
+            <div class="topic-content">
+              @for (item of group.items; track trackByItemId(idx, item); let idx = $index) {
+                <div class="coursework-item" [class.item-with-error]="item.processingError">
+                  <div class="item-header">
+                    @if (item.associatedWithDeveloper?.id; as validId) {
+                      <mat-checkbox
+                        class="item-checkbox"
+                        [checked]="selection.get(validId)"
+                        (change)="toggleItemSelection(validId, group)"
+                        [aria-label]="'Select item: ' + (item.title || 'Untitled')">
+                      </mat-checkbox>
+                    } @else {
+                      <div class="item-checkbox-placeholder"></div>
+                    }
+                    <strong class="item-title">{{ item.title || 'Untitled Assignment' }}</strong>
+                    <span class="item-type"> ({{ item.workType }})</span>
+                  </div>
+
+                  @if (item.processingError) {
+                  <div class="item-processing-error">
+                    <mat-icon color="warn">error_outline</mat-icon>
+                    <span><strong>Processing Error:</strong> {{ item.processingError.message }}
+                      @if (item.processingError.stage) {
+                      (Stage: {{ item.processingError.stage }})
+                      }
+                    </span>
+                  </div>
+                  }
+
+                  <div class="item-description" [innerHTML]="item.descriptionForDisplay | safeHtml"></div>
+
+                  @if (item.materials && item.materials.length > 0) {
+                    <div class="item-materials">
+                      <strong>Materials:</strong>
+                      <mat-list dense>
+                        @for (material of item.materials; track $index) {
+                          <mat-list-item>
+                            <mat-icon matListItemIcon>{{ getMaterialIcon(material) }}</mat-icon>
+                            <div matListItemTitle>
+                              @if (getMaterialLink(material); as url) {
+                                <a [href]="url" target="_blank" rel="noopener noreferrer">
+                                  {{ getMaterialTitle(material) }}
+                                </a>
+                              } @else {
+                                <span>{{ getMaterialTitle(material) }}</span>
+                              }
+                            </div>
+                          </mat-list-item>
+                        }
+                      </mat-list>
+                    </div>
+                  }
+@if (item.localFilesToUpload && item.localFilesToUpload.length > 0) {
+<div class="item-local-files">
+  <strong>Local Files to Upload:</strong>
+  <mat-list dense>
+    @for (localFile of item.localFilesToUpload; track $index) {
+    <mat-list-item>
+      <mat-icon matListItemIcon>attach_file</mat-icon>
+      <div matListItemTitle>
+        <span>{{ localFile.targetFileName || 'Unnamed file' }}</span>
+        @if (localFile.file.mimeType) {
+        <span class="file-mime-type"> ({{ localFile.file.mimeType }})</span>
+        }
+      </div>
+    </mat-list-item>
+    }
+  </mat-list>
+</div>
+}
+
+@if (item.qtiFile && item.qtiFile.length > 0) {
+<div class="item-qti-forms">
+  <strong>QTI Forms to Process:</strong>
+  <mat-list dense>
+    @for (qtiItem of item.qtiFile; track $index) {
+    <mat-list-item>
+      <mat-icon matListItemIcon>quiz</mat-icon>
+      <div matListItemTitle>
+        <span>{{ qtiItem.name || 'Unnamed QTI Form' }}</span>
+        @if (qtiItem.mimeType) {
+        <span class="file-mime-type"> ({{ qtiItem.mimeType }})</span>
+        }
+      </div>
+    </mat-list-item>
+    }
+  </mat-list>
+</div>
+}
+                  @if (!$last) {
+                    <mat-divider class="item-divider"></mat-divider>
+                  }
+                </div>
+              }
+            </div>
+          </mat-expansion-panel>
+        }
+      </mat-accordion>
+    } @else {
+      <p class="no-items-message">No coursework items to display.</p>
+    }
+  </div>
+  </div>

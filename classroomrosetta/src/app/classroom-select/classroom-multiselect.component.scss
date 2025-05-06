@@ -1,0 +1,73 @@
+/**
+ * Copyright 2025 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* Styling for Classroom Multiselect Component with Angular Material */
+
+/* Styles for the main container card */
+.classroom-multiselect-card {
+  max-width: 500px; /* Adjust width as needed */
+  margin: 20px auto; /* Add some margin and center horizontally if desired */
+  display: block; /* Ensure margin auto works */
+}
+
+/* Styles for the loading indicator container */
+.loading-container {
+  display: flex;
+  flex-direction: column; /* Stack spinner and text vertically */
+  align-items: center; /* Center items horizontally */
+  justify-content: center; /* Center items vertically (if container has height) */
+  padding: 20px;
+  min-height: 100px; /* Ensure some height while loading */
+  text-align: center; /* Center text */
+}
+
+/* Style for the loading text */
+.loading-container p {
+  margin-top: 15px; /* Space between spinner and text */
+  color: rgba(0, 0, 0, 0.6); /* Material-like text color */
+}
+
+/* Styles for the error message block */
+.error-message {
+  color: #f44336; /* Material error color (red) */
+  padding: 16px;
+  text-align: center;
+  background-color: #ffebee; /* Light red background */
+  border: 1px solid #ffcdd2; /* Lighter red border */
+  border-radius: 4px;
+  margin: 10px 0; /* Add vertical margin */
+}
+
+/* Styles for the message shown when no classrooms are found */
+.no-classrooms-message {
+  padding: 16px;
+  text-align: center;
+  color: rgba(0, 0, 0, 0.6); /* Material-like secondary text color */
+}
+
+/* Style the form field containing the select */
+.classroom-select-field {
+  width: 100%; /* Make the select field take full width of the card content */
+}
+
+/* Remove styles related to previous mat-list/mat-checkbox if they existed */
+/* e.g., styles targeting .mat-mdc-list-item, mat-checkbox etc. */
+
+/* Optional: Style for the card content area if needed */
+mat-card-content {
+  /* Adjust padding or other styles if necessary */
+  padding-bottom: 16px; /* Ensure space below the select */
+}

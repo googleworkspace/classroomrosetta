@@ -1,0 +1,68 @@
+<!--
+ Copyright 2025 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<div class="container upload-container"> @if (isProcessing) {
+    <div class="loading-overlay">
+      <mat-progress-spinner mode="indeterminate" diameter="50"></mat-progress-spinner>
+      <p class="loading-message">{{ loadingMessage }}</p>
+    </div>
+  }
+
+  <div class="file-input-area">
+    <button mat-raised-button color="accent" (click)="onClickFileInputButton()" [disabled]="isProcessing">
+      <mat-icon>attach_file</mat-icon>
+      <span>Select IMSCC File</span>
+    </button>
+    <input hidden type="file" #fileInput (change)="onChangeFileInput()"/>
+    @if (selectedFile) {
+      <span class="file-name">Selected: {{ selectedFile.name }}</span>
+    }
+    <button mat-flat-button color="primary" (click)="onUpload()" [disabled]="!selectedFile || isProcessing">
+        <mat-icon>cloud_upload</mat-icon>
+        <span>Upload & Convert</span>
+    </button>
+  </div>
+
+  @if (errorMessage) {
+    <div class="error-message">
+      <mat-icon color="warn">error_outline</mat-icon>
+      <span>{{ errorMessage }}</span>
+      <button mat-icon-button (click)="errorMessage = null" aria-label="Clear error message">
+        <mat-icon>close</mat-icon>
+      </button>
+    </div>
+  }
+
+   @if (successMessage && !isProcessing && !errorMessage) {
+    <div class="success-message">
+      <mat-icon color="primary">check_circle_outline</mat-icon>
+      <span>{{ successMessage }}</span>
+       <button mat-icon-button (click)="successMessage = null" aria-label="Clear success message">
+        <mat-icon>close</mat-icon>
+      </button>
+    </div>
+  }
+
+  @if (assignments.length > 0 && !isProcessing && !errorMessage?.includes('Conversion Error') && !errorMessage?.includes('Unzip/Read Error')) {
+    <app-coursework-display
+      [assignments]="assignments"
+      (submitSelection)="process($event)">
+    </app-coursework-display>
+  } @else if (!isProcessing && !selectedFile && !errorMessage) {
+     <p class="info-message">Please select an IMSCC zip file to begin.</p>
+  }
+
+</div>

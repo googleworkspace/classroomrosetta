@@ -1,0 +1,105 @@
+/**
+ * Copyright 2025 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+.file-select-button, .file-name {
+  display: inline-block;
+  margin: 8px;
+}
+
+.upload-container {
+  padding: 20px;
+  position: relative; /* Needed for absolute positioning of overlay */
+  min-height: 150px; /* Give it some minimum height */
+}
+
+.file-input-area {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.file-name {
+  font-style: italic;
+  color: grey;
+  margin: 0 10px;
+}
+
+.loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(255, 255, 255, 0.85); /* Slightly less transparent */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  text-align: center;
+  border-radius: 4px; /* Optional: match container */
+}
+
+.loading-message {
+  margin-top: 15px;
+  font-weight: 500;
+  color: #333;
+}
+
+.error-message, .success-message, .info-message {
+  padding: 10px 15px;
+  margin: 15px 0;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.error-message {
+  background-color: #f8d7da; /* Light red */
+  color: #721c24; /* Dark red */
+  border: 1px solid #f5c6cb;
+}
+
+.error-message button {
+    margin-left: auto;
+    color: #721c24;
+}
+
+.success-message {
+  background-color: #d4edda; /* Light green */
+  color: #155724; /* Dark green */
+  border: 1px solid #c3e6cb;
+}
+
+.success-message button {
+    margin-left: auto;
+    color: #155724;
+}
+
+
+.info-message {
+  color: grey;
+  text-align: center;
+  padding: 20px;
+}
+
+app-coursework-display {
+  margin-top: 20px;
+}
+
