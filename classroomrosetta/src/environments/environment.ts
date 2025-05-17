@@ -4,14 +4,14 @@
 export const environment = {
   production: true,
   firebaseConfig: {
-    apiKey: "AIzaSyDgZbZprY3jplAF2BlCScCvxsYLYMnc3XA",
-    authDomain: "classroomrosetta.firebaseapp.com",
-    projectId: "classroomrosetta",
-    storageBucket: "classroomrosetta.firebasestorage.app",
-    messagingSenderId: "143950114814",
-    appId: "1:143950114814:web:e7a3fe475a9b429f8ddaaf",
-    clientId: "143950114814-0s353iqh4ichugt3ml5d45ll4tc18u5g.apps.googleusercontent.com"
+    apiKey: "",
+    authDomain: "",
+    projectId: "",
+    storageBucket: "",
+    messagingSenderId: "",
+    appId: "",
+    clientId: ""
   },
-  formsItemsApi: "https://script.googleapis.com/v1/scripts/AKfycbwyxdsxvFia6uYjv5R4XmczTq36cradpgdFZjDwbsPNkhl3cqiLHGw_PJhcUkblCzB0:run"
+  formsItemsApi: ""
   // Add other environment-specific variables here if needed
 };
