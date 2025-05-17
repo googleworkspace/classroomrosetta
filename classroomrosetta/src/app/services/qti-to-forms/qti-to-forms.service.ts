@@ -551,12 +551,14 @@ export class QtiToFormsService {
         const choiceTypeValue: 'RADIO' | 'CHECKBOX' = isCheckbox ? 'CHECKBOX' : 'RADIO';
         const options: Option[] = [];
         const choices = Array.from(interactionElement.querySelectorAll('simpleChoice, response_label'));
+        const choicetrack: string[] = [];
         choices.forEach(choice => {
           let choiceTextVal = '';
           let choiceId = choice.getAttribute('identifier') || (choice.tagName.toLowerCase() === 'response_label' ? choice.getAttribute('ident') : null);
           let textEl = choice.tagName.toLowerCase() === 'simplechoice' ? choice : (choice.closest('flow_label')?.querySelector('material') || choice.nextElementSibling)?.querySelector('mattext, p, div') || choice;
           if (textEl) choiceTextVal = this.getTextContent(textEl).trim();
-          if (choiceTextVal && choiceId) {
+          if (choiceTextVal && choiceId && !choicetrack.includes(choiceTextVal)) {
+            choicetrack.push(choiceTextVal)
             options.push({value: choiceTextVal});
             allParsedChoices.push({identifier: choiceId, value: choiceTextVal});
           }

@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -55,7 +55,6 @@ export class DriveFolderService {
   private readonly ROOT_IMPORT_FOLDER_NAME = 'LMS Import';
 
   // Custom property key to store the source identifier HASH
-  // TODO: Standardize this key across all services (e.g., 'imsccIdentifierHash')
   private readonly ITEM_ID_HASH_PROPERTY_KEY = 'itemIdHash'; // Renamed to reflect it stores a hash
 
   // Cache for the root import folder ID
@@ -215,6 +214,7 @@ export class DriveFolderService {
  /**
  * Finds or creates a folder, using HASHED ItemId if provided.
  * Includes retry logic inherited from called methods.
+ * THIS METHOD IS NOW PUBLIC.
  *
  * @param folderName The name of the folder.
  * @param parentFolderId The ID of the parent folder.
@@ -222,11 +222,9 @@ export class DriveFolderService {
  * @param itemId Optional ORIGINAL ItemId associated with this folder. Will be hashed if provided.
  * @returns Observable emitting the ID of the found or created folder.
  */
-private findOrCreateFolder(folderName: string, parentFolderId: string, accessToken: string, itemId?: string): Observable<string> {
-    // Note: Retry logic is applied within findFolderByHashedItemId, findFolderByName, and createFolder.
-    // No additional retry wrapper needed here, but we need to handle errors from the inner calls.
+  public findOrCreateFolder(folderName: string, parentFolderId: string, accessToken: string, itemId?: string): Observable<string> {
     if (itemId) {
-      console.log(`Attempting to find or create folder "${folderName}" using ItemId "${itemId}" (will be hashed)`);
+      console.log(`Attempting to find or create folder "${folderName}" using ItemId "${itemId}" (will be hashed) in parent ${parentFolderId}`);
       return from(this.utils.generateHash(itemId)).pipe(
         catchError(hashError => {
           console.error(`Error generating hash for itemId "${itemId}":`, hashError);
@@ -235,39 +233,35 @@ private findOrCreateFolder(folderName: string, parentFolderId: string, accessTok
         }),
         switchMap(hashedItemId => {
           console.log(`Generated hash for itemId "${itemId}": ${hashedItemId}`);
-          return this.findFolderByHashedItemId(hashedItemId, accessToken).pipe( // Retries handled inside
+          return this.findFolderByHashedItemId(hashedItemId, accessToken).pipe(
             switchMap(folderIdFromHash => {
               if (folderIdFromHash) {
                 console.log(`Using existing folder found by ItemId HASH "${hashedItemId}". ID: ${folderIdFromHash}`);
                 return of(folderIdFromHash);
               } else {
                 console.log(`Folder with ItemId HASH "${hashedItemId}" not found. Creating new folder "${folderName}" with this HASH.`);
-                return this.createFolder(folderName, parentFolderId, accessToken, hashedItemId); // Retries handled inside
+                return this.createFolder(folderName, parentFolderId, accessToken, hashedItemId);
               }
             })
           );
         }),
-        // Catch errors from hashing, finding, or creating
         catchError(err => {
-            // Log the error from the find/create process for this specific folder
-            console.error(`Failed to find or create folder "${folderName}" associated with itemId "${itemId}" (final after retries):`, err.message || err);
-            // Propagate the error
+          console.error(`Failed to find or create folder "${folderName}" associated with itemId "${itemId}" (final after retries):`, err.message || err);
             return throwError(() => err);
         })
       );
     } else {
       console.log(`Attempting to find or create folder "${folderName}" by name in parent "${parentFolderId}" (no ItemId provided).`);
-      return this.findFolderByName(folderName, parentFolderId, accessToken).pipe( // Retries handled inside
+      return this.findFolderByName(folderName, parentFolderId, accessToken).pipe(
         switchMap(folderIdFromName => {
           if (folderIdFromName) {
             console.log(`Using existing folder found by name "${folderName}". ID: ${folderIdFromName}`);
             return of(folderIdFromName);
           } else {
             console.log(`Folder with name "${folderName}" not found in parent "${parentFolderId}". Creating new folder.`);
-            return this.createFolder(folderName, parentFolderId, accessToken); // Retries handled inside
+            return this.createFolder(folderName, parentFolderId, accessToken);
           }
         }),
-        // Catch errors from finding or creating by name
         catchError(err => {
             console.error(`Failed to find or create folder "${folderName}" by name (final after retries):`, err.message || err);
             return throwError(() => err);
@@ -280,14 +274,12 @@ private findOrCreateFolder(folderName: string, parentFolderId: string, accessTok
   /**
    * Gets the ID of the root "LMS Import" folder, creating it if necessary.
    * Uses caching to avoid repeated lookups.
-   * (No itemId/hashing involved for the root import folder itself)
    *
    * @param accessToken A valid Google OAuth 2.0 access token.
    * @returns Observable emitting the ID of the "LMS Import" folder.
    */
   public getRootImportFolderId(accessToken: string): Observable<string> {
     if (!this.rootImportFolderId$) {
-      // findOrCreateFolder internally calls methods with retry logic
       this.rootImportFolderId$ = this.findOrCreateFolder(this.ROOT_IMPORT_FOLDER_NAME, 'root', accessToken /* no itemId */).pipe(
         tap(id => console.log(`Root Import Folder ID (${this.ROOT_IMPORT_FOLDER_NAME}): ${id}`)),
         shareReplay(1) // Cache the result
@@ -298,7 +290,6 @@ private findOrCreateFolder(folderName: string, parentFolderId: string, accessTok
 
   /**
    * Gets the ID of the Course Folder within the root import folder.
-   * (No itemId/hashing involved for the course folder itself)
    *
    * @param courseName The name for the course folder.
    * @param accessToken A valid Google OAuth 2.0 access token.
@@ -306,7 +297,6 @@ private findOrCreateFolder(folderName: string, parentFolderId: string, accessTok
    */
   public getCourseFolderId(courseName: string, accessToken: string): Observable<string> {
     const sanitizedCourseName = this.sanitizeFolderName(courseName);
-    // findOrCreateFolder internally calls methods with retry logic
     return this.getRootImportFolderId(accessToken).pipe(
       switchMap(rootImportFolderId =>
         this.findOrCreateFolder(sanitizedCourseName, rootImportFolderId, accessToken /* no itemId */)
@@ -316,7 +306,6 @@ private findOrCreateFolder(folderName: string, parentFolderId: string, accessTok
 
   /**
    * Gets the ID of the Topic Folder within a specific course folder.
-   * (No itemId/hashing involved for the topic folder itself)
    *
    * @param topicName The name for the topic folder.
    * @param courseFolderId The ID of the parent course folder.
@@ -325,7 +314,6 @@ private findOrCreateFolder(folderName: string, parentFolderId: string, accessTok
    */
   public getTopicFolderId(topicName: string, courseFolderId: string, accessToken: string): Observable<string> {
     const sanitizedTopicName = this.sanitizeFolderName(topicName);
-    // findOrCreateFolder internally calls methods with retry logic
     return this.findOrCreateFolder(sanitizedTopicName, courseFolderId, accessToken /* no itemId */);
   }
 
@@ -341,7 +329,6 @@ private findOrCreateFolder(folderName: string, parentFolderId: string, accessTok
    */
   public getAssignmentFolderId(assignmentName: string, topicFolderId: string, accessToken: string, itemId: string): Observable<string> {
     const sanitizedAssignmentName = this.sanitizeFolderName(assignmentName);
-    // Pass the ORIGINAL itemId here; findOrCreateFolder will handle hashing and retries internally
     return this.findOrCreateFolder(sanitizedAssignmentName, topicFolderId, accessToken, itemId);
   }
 
@@ -361,10 +348,9 @@ private findOrCreateFolder(folderName: string, parentFolderId: string, accessTok
     courseName: string,
     topicName: string,
     assignmentName: string,
-    itemId: string, // Now mandatory and used for the assignment folder (will be hashed internally)
+    itemId: string,
     accessToken: string
   ): Observable<string> {
-    // Input validation
     if (!courseName || !topicName || !assignmentName) {
       return throwError(() => new Error('Course, Topic, and Assignment names are required.'));
     }
@@ -372,15 +358,13 @@ private findOrCreateFolder(folderName: string, parentFolderId: string, accessTok
         return throwError(() => new Error('An ItemId is required to ensure the assignment folder structure.'));
     }
 
-    // Chain the folder creation/retrieval calls. Retry logic is handled within the get*FolderId methods via findOrCreateFolder.
     return this.getCourseFolderId(courseName, accessToken).pipe(
       switchMap(courseFolderId => this.getTopicFolderId(topicName, courseFolderId, accessToken)),
       switchMap(topicFolderId => this.getAssignmentFolderId(assignmentName, topicFolderId, accessToken, itemId)),
       tap(assignmentFolderId => console.log(`Ensured folder structure complete. Assignment Folder ID: ${assignmentFolderId} (associated with ItemId: ${itemId}, stored as hash)`)),
-      // Add a final catchError here to handle failures in the overall chain
       catchError(err => {
           console.error(`Failed to ensure folder structure for assignment "${assignmentName}" (itemId: ${itemId}):`, err.message || err);
-          return throwError(() => new Error(`Could not ensure folder structure for assignment "${assignmentName}". ${err.message || err}`));
+        return throwError(() => new Error(`Could not ensure folder structure for assignment "${assignmentName}". ${err.message || String(err)}`));
       })
     );
   }
@@ -388,7 +372,6 @@ private findOrCreateFolder(folderName: string, parentFolderId: string, accessTok
 
   /**
    * Helper function to sanitize folder names (basic example).
-   * (No changes needed)
    */
   private sanitizeFolderName(name: string): string {
     if (!name) return 'Untitled';
@@ -397,10 +380,9 @@ private findOrCreateFolder(folderName: string, parentFolderId: string, accessTok
 
    /**
    * Helper function to escape single quotes and backslashes for Drive API query parameters.
-   * (No changes needed)
    */
   private escapeQueryParam(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
    }
 
-} // End of Service
+}

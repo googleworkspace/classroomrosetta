@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -72,7 +72,7 @@ export class ConverterService {
         }
       }
       // For text-based files, attempt decoding ArrayBuffer to string
-      else if (this.parsingHelper.isArrayBuffer(file.data) && !file.mimeType?.startsWith('image/')) {
+      else if (this.parsingHelper.isArrayBuffer(file.data) && !file.mimeType?.startsWith('image/') && !file.mimeType?.startsWith('video/') && !file.mimeType?.startsWith('audio/')) { // Avoid decoding binary like video/audio
         try {
           const textDecoder = new TextDecoder('utf-8'); // Assuming UTF-8 is common
           const textData = textDecoder.decode(file.data);
@@ -346,11 +346,11 @@ export class ConverterService {
         if (!primaryResourceFile) {
           console.warn(`   [Converter] Referenced file not found in package: ${primaryFilePathOrUrl} (Resolved: ${resolvedPrimaryHref})`);
         } else {
-          console.log(`   [Converter] Found primary resource file: ${primaryResourceFile.name}`);
+          console.log(`   [Converter] Found primary resource file: ${primaryResourceFile.name} (MIME: ${primaryResourceFile.mimeType})`);
           // If it's an XML file with string data, try parsing it immediately
           if ((primaryResourceFile.name.toLowerCase().endsWith('.xml') || primaryResourceFile.mimeType?.includes('xml')) && typeof primaryResourceFile.data === 'string') {
             try {
-              console.log(`   [Converter] Attempting to parse primary file XML: ${primaryResourceFile.name} (MIME: ${primaryResourceFile.mimeType})`);
+              console.log(`   [Converter] Attempting to parse primary file XML: ${primaryResourceFile.name}`);
               const parser = new DOMParser();
               const cleanXmlData = primaryResourceFile.data.charCodeAt(0) === 0xFEFF ? primaryResourceFile.data.substring(1) : primaryResourceFile.data;
               primaryFileXmlDoc = parser.parseFromString(cleanXmlData, "application/xml");
@@ -390,15 +390,20 @@ export class ConverterService {
 
     if (isStandardQti || isD2lQuiz) {
       courseworkBase.workType = 'ASSIGNMENT';
-      if (primaryResourceFile && primaryFileXmlDoc) {
+      if (primaryResourceFile && primaryFileXmlDoc) { // QTI XML needs to be parsable
         courseworkBase.qtiFile = [primaryResourceFile];
         courseworkBase.associatedWithDeveloper!.sourceXmlFile = primaryResourceFile;
         console.log(`   [Converter] Identified QTI/Assessment: "${finalTitle}" (Resource ID: ${resourceIdentifier}). Attached QTI file.`);
-      } else if (primaryResourceFile) {
-        console.warn(`   [Converter] QTI/Assessment "${finalTitle}" (Resource ID: ${resourceIdentifier}) main file (${primaryResourceFile.name}) could not be parsed as XML or was not XML. Attaching as general file.`);
+      } else if (primaryResourceFile && (primaryResourceFile.name.toLowerCase().endsWith('.zip') || primaryResourceFile.mimeType === 'application/zip')) { // Handle QTI in zip
+        console.log(`   [Converter] Identified QTI/Assessment (ZIP): "${finalTitle}" (Resource ID: ${resourceIdentifier}). Attaching ZIP file.`);
+        courseworkBase.localFilesToUpload?.push({file: primaryResourceFile, targetFileName: primaryResourceFile.name.split('/').pop() || primaryResourceFile.name});
+        courseworkBase.associatedWithDeveloper!.sourceOtherFile = primaryResourceFile; // Treat zip as 'other' for now
+      } else if (primaryResourceFile) { // Fallback for non-XML QTI or unparsable XML
+        console.warn(`   [Converter] QTI/Assessment "${finalTitle}" (Resource ID: ${resourceIdentifier}) main file (${primaryResourceFile.name}) was not parsable XML or a ZIP. Attaching as general file.`);
         courseworkBase.localFilesToUpload?.push({file: primaryResourceFile, targetFileName: primaryResourceFile.name.split('/').pop() || primaryResourceFile.name});
         courseworkBase.associatedWithDeveloper!.sourceOtherFile = primaryResourceFile;
-      } else {
+      }
+      else {
         console.warn(`   Skipping QTI/Assessment resource "${finalTitle}" (ID: ${resourceIdentifier}): No valid primary file found.`);
         this.skippedItemLog.push({id: imsccIdentifier, title: finalTitle, reason: 'QTI/Assessment - No valid primary file'});
         return of(null);
@@ -512,7 +517,7 @@ export class ConverterService {
         courseworkBase.localFilesToUpload?.push({file: primaryResourceFile, targetFileName: targetFileName});
         courseworkBase.descriptionForClassroom = `Please see the attached HTML file: ${targetFileName}`;
         courseworkBase.workType = 'MATERIAL';
-        courseworkBase.associatedWithDeveloper!.sourceOtherFile = primaryResourceFile;
+        courseworkBase.associatedWithDeveloper!.sourceOtherFile = primaryResourceFile; // HTML with non-string data is treated as 'other'
         console.warn(`   [Converter] Primary HTML file "${finalTitle}" data was not string. Attaching file.`);
       }
     }
@@ -529,7 +534,7 @@ export class ConverterService {
       }
       console.log(`   [Converter] Identified External Link/Special Ref: "${finalTitle}" -> ${linkUrl}.`);
     }
-    else if (primaryResourceFile) {
+    else if (primaryResourceFile) { // This is the catch-all for other file types
       courseworkBase.workType = 'MATERIAL';
       const targetFileName = primaryResourceFile.name.split('/').pop() || primaryResourceFile.name;
       if (!courseworkBase.localFilesToUpload?.some(f => f.file.name === primaryResourceFile!.name)) {
@@ -537,7 +542,7 @@ export class ConverterService {
       }
       if (!courseworkBase.descriptionForClassroom) courseworkBase.descriptionForClassroom = `Please see the attached file: ${targetFileName}`;
       courseworkBase.associatedWithDeveloper!.sourceOtherFile = primaryResourceFile;
-      console.log(`   [Converter] Identified General File Material: "${finalTitle}" (Resource ID: ${resourceIdentifier}). File: ${primaryResourceFile.name}.`);
+      console.log(`   [Converter] Identified General File Material: "${finalTitle}" (Resource ID: ${resourceIdentifier}). File: ${primaryResourceFile.name} (MIME: ${primaryResourceFile.mimeType}).`);
     }
     else {
       console.warn(`   Skipping Resource "${finalTitle}" (ID: ${resourceIdentifier}, Type: ${resourceType || 'N/A'}): Could not determine primary file/link, or it's an unhandled type with no content.`);
@@ -563,27 +568,28 @@ export class ConverterService {
           const normalizedResolvedDepPath = this.parsingHelper.correctCyrillicCPath(this.parsingHelper.tryDecodeURIComponent(resolvedDepHref)).toLowerCase();
           const depFile = this.fileMap.get(normalizedResolvedDepPath) || null;
 
-          if (depFile && typeof depFile.data !== 'string') { // Check if data is ArrayBuffer (binary)
-            // Explicitly check types to exclude those typically processed differently
-            if (!depFile.mimeType?.startsWith('text/') &&
-              !depFile.mimeType?.startsWith('application/xml') &&
-              !depFile.mimeType?.startsWith('image/')) {
+          // Only attach dependency files if they are not the primary resource file already processed
+          // and are not images/videos (which are handled by processHtmlContent if embedded)
+          // and are not text/xml (which are usually part of content or specific resource types)
+          if (depFile && depFile.name !== primaryResourceFile?.name &&
+            !depFile.mimeType?.startsWith('image/') &&
+            !depFile.mimeType?.startsWith('video/') &&
+            !depFile.mimeType?.startsWith('text/') &&
+            !depFile.mimeType?.includes('xml')
+          ) {
                 const targetFileName = depFile.name.split('/').pop() || depFile.name;
                 if (courseworkBase.localFilesToUpload && !courseworkBase.localFilesToUpload.some(f => f.file.name === depFile!.name)) {
                   courseworkBase.localFilesToUpload.push({file: depFile, targetFileName: targetFileName});
-                  console.log(`   [Converter] Added dependency file for upload: ${depFile.name}`);
+                  console.log(`   [Converter] Added non-media/non-text dependency file for upload: ${depFile.name}`);
                 }
-              } else {
-                console.log(`   [Converter] Dependency file ${depFile.name} is text/xml/image type (string data), skipping direct attachment via dependency.`);
-              }
           } else if (!depFile && (resolvedDepHref.startsWith('http://') || resolvedDepHref.startsWith('https://') || this.specialRefPrefixes.some(prefix => resolvedDepHref!.startsWith(prefix)))) {
             const linkUrl = resolvedDepHref;
             if (courseworkBase.materials && !courseworkBase.materials.some(m => m.link?.url === linkUrl)) {
               courseworkBase.materials.push({link: {url: linkUrl}});
               console.log(`   [Converter] Added dependency link to materials: ${linkUrl}`);
             }
-          } else if (depFile && typeof depFile.data === 'string') {
-             console.log(`   [Converter] Dependency file ${depFile.name} has string data, skipping direct attachment via dependency.`);
+          } else if (depFile) {
+            console.log(`   [Converter] Dependency file ${depFile.name} (MIME: ${depFile.mimeType}) was primary, media, text, or XML; not re-attaching via dependency logic.`);
           } else {
             console.warn(`   [Converter] Dependency with identifierref "${depIdRef}" could not be resolved to a file or link.`);
           }
@@ -599,7 +605,7 @@ export class ConverterService {
     // Final check
     const hasContent = !!courseworkBase.descriptionForClassroom?.trim() ||
       !!courseworkBase.descriptionForDisplay?.trim() ||
-      !!courseworkBase.qtiFile ||
+      !!courseworkBase.qtiFile || // Check for qtiFile array directly
       (courseworkBase.materials && courseworkBase.materials.length > 0) ||
       (courseworkBase.localFilesToUpload && courseworkBase.localFilesToUpload.length > 0);
 
@@ -651,17 +657,19 @@ export class ConverterService {
     const referencedFiles: Array<{file: ImsccFile; targetFileName: string}> = [];
     const externalLinks: string[] = [];
 
-    let containsRichElements = contentElement.querySelector('img, table, ul, ol, h1, h2, h3, h4, h5, h6, blockquote, pre, code, strong, em, u, s, sub, sup, p, div, span[style]') !== null;
+    // Check for rich elements like images, tables, lists, headings, blockquotes, etc.
+    let containsRichElements = contentElement.querySelector('img, table, ul, ol, h1, h2, h3, h4, h5, h6, blockquote, pre, code, strong, em, u, s, sub, sup, p, div, span[style], video') !== null;
     if (!containsRichElements && contentElement.innerHTML.includes('<br')) containsRichElements = true;
      if (!containsRichElements && contentElement.children.length > 0) {
         const simpleTextLength = (contentElement.textContent || '').replace(/\s/g, '').length;
         const htmlLength = contentElement.innerHTML.replace(/\s/g, '').length;
-         if (htmlLength > simpleTextLength + 10) {
+       if (htmlLength > simpleTextLength + 10) { // A bit of leeway for minor HTML structure
               containsRichElements = true;
          }
     }
 
 
+    // Process <a> and <img> tags
     Array.from(contentElement.querySelectorAll('a, img')).forEach((el: Element) => {
       const isLink = el.tagName.toUpperCase() === 'A';
       const isImage = el.tagName.toUpperCase() === 'IMG';
@@ -671,28 +679,40 @@ export class ConverterService {
 
       const originalRefValue = el.getAttribute(attributeName);
       if (!originalRefValue || originalRefValue.trim() === '' || originalRefValue === '#') {
-        el.remove();
-        return;
-      }
-
-      if (originalRefValue.match(/^https?:\/\//i)) {
-        if (isLink && !externalLinks.includes(originalRefValue)) {
-          externalLinks.push(originalRefValue);
-        } else if (isImage) {
+        // Remove empty or anchor-only links/images or create a text node from content if it's a link
+        if (isLink && el.textContent?.trim()) {
+          const textNode = htmlDoc.createTextNode(el.textContent);
+          el.parentNode?.replaceChild(textNode, el);
+        } else {
+          el.remove();
         }
         return;
       }
 
-      if (originalRefValue.match(/^data:image/i) && isImage) {
+      // Handle external links (http, https, mailto, tel)
+      if (originalRefValue.match(/^https?:\/\//i)) {
+        if (isLink && !externalLinks.includes(originalRefValue)) {
+          externalLinks.push(originalRefValue);
+        }
+        // External images are left as is.
         return;
       }
-
       if (originalRefValue.match(/^mailto:/i) || originalRefValue.match(/^tel:/i) || originalRefValue.match(/^javascript:/i)) {
+        // Keep mailto and tel links, remove javascript links for security
+        if (originalRefValue.match(/^javascript:/i)) {
+          if (el.parentNode) {
+            const textNode = htmlDoc.createTextNode(el.textContent || 'Removed Scripted Link');
+            el.parentNode.replaceChild(textNode, el);
+          } else {
+            el.remove();
+          }
+        }
         return;
       }
+      // Handle page-internal anchors (e.g. #section1)
       if (originalRefValue.match(/^#/i)) {
         if (el.parentNode) {
-          const textNode = htmlDoc.createTextNode(el.textContent || '');
+          const textNode = htmlDoc.createTextNode(el.textContent || 'Internal Link');
           el.parentNode.replaceChild(textNode, el);
         } else {
           el.remove();
@@ -700,17 +720,26 @@ export class ConverterService {
         return;
       }
 
+      // Handle data URIs for images
+      if (originalRefValue.match(/^data:image/i) && isImage) {
+        // Data URIs are kept as is.
+        return;
+      }
+
+
+      // --- Resolve local files ---
       const matchedPrefix = this.specialRefPrefixes.find(prefix => originalRefValue.startsWith(prefix));
       let pathPartForResolution = originalRefValue;
-      let baseForResolution = htmlSourcePath;
+      let baseForResolution = htmlSourcePath; // Base path is the path of the HTML file itself
 
       if (matchedPrefix) {
         pathPartForResolution = originalRefValue.substring(matchedPrefix.length);
         if (pathPartForResolution.startsWith('/')) pathPartForResolution = pathPartForResolution.substring(1);
-        baseForResolution = "";
+        baseForResolution = ""; // For special prefixes, assume path is from root of package
         console.log(`   [processHtmlContent] Handling special prefix "${matchedPrefix}" in "${originalRefValue}". Path part: "${pathPartForResolution}"`);
       }
 
+      // Remove query parameters or hash fragments from the path before resolving
       const queryOrHashIndex = pathPartForResolution.search(/[?#]/);
       if (queryOrHashIndex !== -1) {
         pathPartForResolution = pathPartForResolution.substring(0, queryOrHashIndex);
@@ -720,7 +749,6 @@ export class ConverterService {
       const resolvedPath = this.parsingHelper.resolveRelativePath(baseForResolution, decodedPathPart);
 
       if (resolvedPath) {
-        // Use file map for lookup
         const normalizedResolvedPath = this.parsingHelper.correctCyrillicCPath(this.parsingHelper.tryDecodeURIComponent(resolvedPath)).toLowerCase();
         const file = this.fileMap.get(normalizedResolvedPath) || null;
 
@@ -728,11 +756,9 @@ export class ConverterService {
           const targetFileName = file.name.split('/').pop() || file.name;
 
           if (isImage && file.mimeType?.startsWith('image/') && typeof file.data === 'string' && file.data.startsWith('data:image')) {
-            // Image data is already base64, keep it as is.
-            // This case should ideally be handled in the initial file processing map if needed.
-            // If data URLs are handled there, this branch won't be needed here for adding to referencedFiles.
-             // el.setAttribute('src', file.data); // Keep this line to ensure data URL is on the element
-             console.log(`   [processHtmlContent] Found data URL image for ${file.name}. Keeping.`);
+            // This is a data URI that was already processed into the fileMap. Keep it.
+            el.setAttribute('src', file.data);
+            console.log(`   [processHtmlContent] Found data URL image for ${file.name} in fileMap. Ensuring src is set.`);
           } else if (isImage) {
             const altText = el.getAttribute('alt') || targetFileName || 'image';
             const span = htmlDoc.createElement('span');
@@ -755,7 +781,7 @@ export class ConverterService {
             }
           }
         } else {
-          console.warn(`   [processHtmlContent] Local file referenced in HTML not found: ${originalRefValue} (Resolved: ${resolvedPath})`);
+          console.warn(`   [processHtmlContent] Local file referenced in <a> or <img> not found: ${originalRefValue} (Resolved: ${resolvedPath})`);
           const span = htmlDoc.createElement('span');
           span.style.cssText = "color: red; border: 1px dashed red; padding: 2px 5px; display: inline-block; font-style: italic; text-decoration: line-through;";
           span.textContent = `[Broken Link: ${originalRefValue}]`;
@@ -766,7 +792,7 @@ export class ConverterService {
           }
         }
       } else {
-        console.warn(`   [processHtmlContent] Could not resolve local path referenced in HTML: ${originalRefValue}`);
+        console.warn(`   [processHtmlContent] Could not resolve local path for <a> or <img>: ${originalRefValue}`);
         const span = htmlDoc.createElement('span');
         span.style.cssText = "color: red; border: 1px dashed red; padding: 2px 5px; display: inline-block; font-style: italic; text-decoration: line-through;";
         span.textContent = `[Broken Link: ${originalRefValue}]`;
@@ -778,13 +804,98 @@ export class ConverterService {
       }
     });
 
+    // Process <video> tags
+    Array.from(contentElement.querySelectorAll('video')).forEach((videoEl: HTMLVideoElement) => {
+      const videoTitle = decode(videoEl.getAttribute('title') || 'Untitled Video'); // Decode title for display
+      let videoFileFoundAndReferenced = false;
+      let originalVideoSrcPath: string | null = null;
+
+      Array.from(videoEl.querySelectorAll('source')).forEach((sourceEl: HTMLSourceElement) => {
+        if (videoFileFoundAndReferenced) return;
+
+        const originalSrc = sourceEl.getAttribute('src');
+        if (!originalSrc || originalSrc.match(/^https?:\/\//i) || originalSrc.match(/^data:/i)) {
+          console.log(`   [processHtmlContent] Skipping video source (external or data URI): ${originalSrc}`);
+          return;
+        }
+
+        const matchedPrefix = this.specialRefPrefixes.find(prefix => originalSrc.startsWith(prefix));
+        let pathPartForResolution = originalSrc;
+        let baseForResolution = htmlSourcePath;
+
+        if (matchedPrefix) {
+          pathPartForResolution = originalSrc.substring(matchedPrefix.length);
+          if (pathPartForResolution.startsWith('/')) pathPartForResolution = pathPartForResolution.substring(1);
+          baseForResolution = "";
+        }
+
+        const queryOrHashIndex = pathPartForResolution.search(/[?#]/);
+        if (queryOrHashIndex !== -1) {
+          pathPartForResolution = pathPartForResolution.substring(0, queryOrHashIndex);
+        }
+
+        const decodedPathPartForResolution = this.parsingHelper.tryDecodeURIComponent(pathPartForResolution);
+        const resolvedPath = this.parsingHelper.resolveRelativePath(baseForResolution, decodedPathPartForResolution);
+
+        if (resolvedPath) {
+          const normalizedResolvedPath = this.parsingHelper.correctCyrillicCPath(this.parsingHelper.tryDecodeURIComponent(resolvedPath)).toLowerCase();
+          const file = this.fileMap.get(normalizedResolvedPath) || null;
+
+          if (file && file.mimeType?.startsWith('video/')) {
+            const targetFileName = file.name.split('/').pop() || file.name;
+            originalVideoSrcPath = this.parsingHelper.tryDecodeURIComponent(originalSrc);
+            if (!referencedFiles.some(rf => rf.file.name === file.name)) {
+              referencedFiles.push({file, targetFileName});
+              console.log(`   [processHtmlContent] Identified local video ${file.name} (original src: ${originalVideoSrcPath}) for attachment.`);
+            }
+            videoFileFoundAndReferenced = true;
+          } else if (file) {
+            console.warn(`   [processHtmlContent] File found for video source, but not a video MIME type: ${file.name} (MIME: ${file.mimeType})`);
+          } else {
+            console.warn(`   [processHtmlContent] Local video file referenced in <source> not found: ${originalSrc} (Resolved: ${resolvedPath})`);
+          }
+        } else {
+          console.warn(`   [processHtmlContent] Could not resolve local path for video <source>: ${originalSrc}`);
+        }
+      });
+
+      // Create a SPAN placeholder for videos, similar to images/files
+      const placeholderSpan = htmlDoc.createElement('span');
+      placeholderSpan.classList.add('imscc-video-placeholder-text'); // Add a class for potential specific styling/identification if needed
+      placeholderSpan.style.cssText = "color: #333; border: 1px solid #bbb; background-color: #f0f0f0; padding: 10px; margin: 5px 0; font-weight: bold; display: block;"; // Make it block for better visibility
+
+      if (videoFileFoundAndReferenced && originalVideoSrcPath) {
+        // Store necessary info in the text content of the span
+        placeholderSpan.textContent = `[VIDEO_PLACEHOLDER REF_NAME="${originalVideoSrcPath}" DISPLAY_TITLE="${videoTitle}"]`;
+        containsRichElements = true; // Mark as rich content if a video is found
+      } else {
+        placeholderSpan.textContent = `[Video: ${videoTitle} - source not found or not a local video file]`;
+        placeholderSpan.style.fontStyle = "italic";
+        placeholderSpan.style.fontWeight = "normal";
+        placeholderSpan.style.backgroundColor = "#f9f9f9";
+      }
+      videoEl.parentNode?.replaceChild(placeholderSpan, videoEl);
+    });
+
+
     const descriptionForDisplay = decode(contentElement.innerHTML);
 
-    let classroomDesc = (contentElement.innerText || contentElement.textContent || '').replace(/\s+/g, ' ').trim();
+    const tempDiv = htmlDoc.createElement('div');
+    tempDiv.innerHTML = descriptionForDisplay;
+    // No need to remove video placeholder comments anymore as they are not created
+    let classroomDesc = (tempDiv.textContent || tempDiv.innerText || '').replace(/\s+/g, ' ').trim();
 
-    const maxDescLength = 300;
+
+    const maxDescLength = 25000;
     if (classroomDesc.length > maxDescLength) {
-      classroomDesc = classroomDesc.substring(0, maxDescLength - 3) + "...";
+      let truncated = classroomDesc.substring(0, maxDescLength - 20);
+      const lastPeriod = truncated.lastIndexOf('.');
+      if (lastPeriod > 0) {
+        truncated = truncated.substring(0, lastPeriod + 1);
+      } else {
+        truncated = truncated.substring(0, maxDescLength - 3);
+      }
+      classroomDesc = truncated + "...";
     }
     console.log(`   [processHtmlContent] Extracted plain text for classroomDesc: ${classroomDesc.substring(0, 100)}...`);
 

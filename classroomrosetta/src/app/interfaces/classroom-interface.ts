@@ -164,11 +164,6 @@ export interface FileObject {
   name: string;
 }
 
-// Note: GoogleClassroomCoursework appears to be an older/different mapping.
-// CourseWork and CourseWorkMaterial interfaces below are more direct mappings
-// to the current Google Classroom API v1 CourseWork and CourseWorkMaterial resources.
-// You should likely use CourseWork and CourseWorkMaterial when preparing data for the API.
-// ProcessedCourseWork holds the *intermediate* state derived from IMSCC before mapping to API types.
 
 export interface GoogleClassroomCoursework {
   id?: string;
@@ -255,52 +250,3 @@ export interface DriveFile {
   thumbnailLink?: string;
   contentHints?: { thumbnail?: { image: string, mimeType: string } };
 }
-
-/**
- * Represents a material attached to a CourseWork or CourseWorkMaterial in Google Classroom API v1.
- * This structure is used within the `materials` array of CourseWork and CourseWorkMaterial.
- * It seems the previous `Material` interface already covered this, so let's use that one consistently.
- * Renaming this to avoid confusion. Let's call it `GoogleClassroomMaterialAttachment`.
- *
- * Based on Google API docs, the structure is simpler: just `driveFile`, `youtubeVideo`, `link`, or `form`.
- * The top-level `Material` interface you already have *is* this structure.
- * So, the `GoogleClassroomMaterial` interface seems redundant/incorrect based on API docs.
- * Let's remove it and ensure `Material` is used consistently for attachments.
- */
-/*
-export interface GoogleClassroomMaterial { // <-- This interface seems redundant/incorrect based on API
-  id?: string; // This ID doesn't seem part of the API Material structure
-  link?: {
-    url: string;
-    title?: string;
-  };
-  driveFile?: {
-    driveFile: {
-      id: string;
-      title: string;
-    };
-    shareMode: 'VIEW' | 'STUDENT_COPY' | 'EDIT' | 'DRIVE_FILE_UNSPECIFIED';
-  };
-  form?: {
-    formUrl: string;
-    title?: string;
-  };
-  youtubeVideo?: {
-    id: string;
-    title?: string;
-    alternateLink?: string;
-    thumbnailUrl?: string;
-  };
-}
-*/
-
-/*
-// This interface also seems redundant, similar to GoogleClassroomCoursework
-export interface ClassroomAssignment {
-  title: string;
-  description?: string;
-  materials: GoogleClassroomMaterial[]; // <-- uses the potentially redundant interface
-  workType: 'ASSIGNMENT';
-  assigneeMode: 'ALL_STUDENTS';
-}
-*/

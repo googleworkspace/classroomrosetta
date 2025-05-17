@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,59 +14,51 @@
  * limitations under the License.
  */
 
-import { Component, inject, ViewChild, ChangeDetectorRef } from '@angular/core'; // Import ChangeDetectorRef
+import {Component, inject, ViewChild, ChangeDetectorRef} from '@angular/core';
 import JSZip from 'jszip';
-import { Observable, from, of, throwError, forkJoin, EMPTY, Subject } from 'rxjs'; // Added Subject
-import { map, switchMap, concatMap, catchError, tap, finalize, takeUntil,toArray } from 'rxjs/operators'; // Added takeUntil
-import { CommonModule } from '@angular/common'; // Import CommonModule
+import {Observable, from, of, throwError, forkJoin, EMPTY, Subject} from 'rxjs';
+import {map, switchMap, concatMap, catchError, tap, finalize, takeUntil, toArray} from 'rxjs/operators';
+import {CommonModule} from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatInputModule } from '@angular/material/input';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
-import { MatProgressSpinnerModule } from '@angular/material/progress-spinner'; // Import progress spinner
+import {MatProgressSpinnerModule} from '@angular/material/progress-spinner';
 import { ClassroomService } from '../services/classroom/classroom.service';
 import { ConverterService } from '../services/converter/converter.service';
 import { DriveFolderService } from '../services/drive/drive.service';
-// --- Import the refactored services ---
-import {HtmlToDocsService} from '../services/html-to-docs/html-to-docs.service'; // Adjust path
-import {FileUploadService} from '../services/file-upload/file-upload.service'; // Adjust path
-import {QtiToFormsService} from '../services/qti-to-forms/qti-to-forms.service'; // Adjust path
-import {UtilitiesService} from '../services/utilities/utilities.service';
-// --- End refactored service imports ---
-
+import {HtmlToDocsService} from '../services/html-to-docs/html-to-docs.service';
+import {FileUploadService} from '../services/file-upload/file-upload.service';
+import {QtiToFormsService} from '../services/qti-to-forms/qti-to-forms.service';
+import {UtilitiesService, RetryConfig} from '../services/utilities/utilities.service';
 import { AuthService } from '../services/auth/auth.service';
 import {
   ProcessedCourseWork,
   ProcessingResult,
   SubmissionData,
   Material,
-  ImsccFile, // Ensure this is the correct interface used by QtiToFormsService
-  DriveFile
-} from '../interfaces/classroom-interface'; // Adjust path
-
-// Import CourseworkDisplayComponent - Assuming it's standalone and path is correct
+  ImsccFile,
+  DriveFile,
+} from '../interfaces/classroom-interface';
 import { CourseworkDisplayComponent } from '../coursework-display/coursework-display.component';
-
+import {decode} from 'html-entities'; // For decoding HTML entities in text content
 
 // Helper function to escape special characters for use in RegExp
 function escapeRegExp(string: string): string {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Interface for the structure of unzipped files within the component
 interface UnzippedFile {
   name: string;
-  data: string | ArrayBuffer; // This is what unzippedFiles will hold initially
+  data: string | ArrayBuffer;
   mimeType: string;
 }
 
-// Define a more structured error for ProcessingResult to align with ProcessedCourseWork
-interface StagedProcessingError {
-    message: string;
-    stage?: 'Folder Creation' | 'File Upload' | 'Document Creation' | 'Form Creation' | 'Unknown';
-    details?: string;
+export interface StagedProcessingError {
+  message: string;
+  stage: string;
+  details?: any;
 }
-
 
 @Component({
   selector: 'app-file-upload',
@@ -84,9 +76,8 @@ interface StagedProcessingError {
   styleUrl: './file-upload.component.scss'
 })
 export class FileUploadComponent {
-  // --- Component Properties ---
   selectedFile: File | null = null;
-  unzippedFiles: UnzippedFile[] = []; // Holds files with data as string OR ArrayBuffer
+  unzippedFiles: UnzippedFile[] = [];
   @ViewChild('fileInput') fileInput: any = null;
   assignments: ProcessedCourseWork[] = [];
   isProcessing: boolean = false;
@@ -94,7 +85,6 @@ export class FileUploadComponent {
   errorMessage: string | null = null;
   successMessage: string | null = null;
 
-  // --- Service Injection ---
   classroom = inject(ClassroomService);
   converter = inject(ConverterService);
   drive = inject(DriveFolderService);
@@ -102,12 +92,8 @@ export class FileUploadComponent {
   files = inject(FileUploadService);
   qti = inject(QtiToFormsService);
   auth = inject(AuthService);
-  util = inject(UtilitiesService)
-
+  util = inject(UtilitiesService);
   private changeDetectorRef = inject(ChangeDetectorRef);
-
-
-  // --- Component Methods ---
 
   onClickFileInputButton(): void {
     this.fileInput.nativeElement.click();
@@ -131,21 +117,21 @@ export class FileUploadComponent {
       this.errorMessage = null;
       this.successMessage = null;
       this.assignments = [];
-      this.unzippedFiles = []; // Reset unzippedFiles
+      this.unzippedFiles = [];
       this.changeDetectorRef.markForCheck();
       try {
         await this.unzipAndConvert(this.selectedFile);
       } catch (error: any) {
-        console.error('Error during file upload/unzip trigger:', error);
-        this.errorMessage = `Error during setup: ${error?.message || error}`;
+        console.error('[Orchestrator] Error during file upload/unzip trigger:', error);
+        this.errorMessage = `Error during setup: ${error?.message || String(error)}`;
         this.isProcessing = false;
         this.loadingMessage = '';
         this.changeDetectorRef.markForCheck();
       }
     } else if (this.isProcessing) {
-        console.warn('Processing already in progress.');
+      console.warn('[Orchestrator] Processing already in progress.');
     } else {
-      console.warn('No file selected for upload.');
+      console.warn('[Orchestrator] No file selected for upload.');
       this.errorMessage = 'Please select a file first.';
     }
   }
@@ -168,7 +154,7 @@ export class FileUploadComponent {
               data = await zipEntry.async('string');
             } else if (mimeType.startsWith('image/')) {
               const base64Data = await zipEntry.async('base64');
-              data = `data:${mimeType};base64,${base64Data}`; // Data is now a base64 string
+              data = `data:${mimeType};base64,${base64Data}`;
             } else {
               data = await zipEntry.async('arraybuffer');
             }
@@ -179,33 +165,18 @@ export class FileUploadComponent {
       });
 
       const resolvedFiles = await Promise.all(filePromises);
-      // this.unzippedFiles will now have image data as base64 strings, text as strings, others as ArrayBuffer
       this.unzippedFiles = resolvedFiles.filter(f => f !== null) as UnzippedFile[];
-      console.log(`Unzipped files prepared: ${this.unzippedFiles.length} files.`, this.unzippedFiles);
+      console.log(`[Orchestrator] Unzipped files prepared: ${this.unzippedFiles.length} files.`);
 
-      // Prepare files specifically for the ConverterService
-      // ConverterService expects ImsccFile where data is string.
-      // For images, this will be the base64 data URI. For other binary, it might need conversion or special handling in ConverterService.
       const imsccFilesForConverter: ImsccFile[] = this.unzippedFiles.map(uf => {
         let dataForConverter: string;
         if (typeof uf.data === 'string') {
-          dataForConverter = uf.data; // Already string (text, XML, or base64 image from initial unzipping)
+          dataForConverter = uf.data;
         } else if (uf.data instanceof ArrayBuffer) {
-          // This case is for binary files that are NOT images and NOT text.
-          // ConverterService might need to handle ArrayBuffer or expect a placeholder/different format.
-          // For now, let's assume it expects a string, so we'll create a placeholder or attempt base64.
-          // This part might need refinement based on how ConverterService handles generic binary files.
-          console.warn(`File "${uf.name}" (mime: ${uf.mimeType}) is ArrayBuffer. ConverterService expects string. Attempting base64 for generic binary data.`);
-          try {
-            // Create a raw base64 string, not a data URI, as ConverterService might not expect data URI for non-image binary files.
-            dataForConverter = this.util.arrayBufferToBase64(uf.data);
-          }
-          catch (e) {
-            console.error(`Error converting ArrayBuffer for ${uf.name} to base64 for ConverterService`, e);
-            dataForConverter = `[Binary data for ${uf.name} - conversion failed]`; // Placeholder
-          }
+          console.warn(`[Orchestrator] File "${uf.name}" (mime: ${uf.mimeType}) is ArrayBuffer. ConverterService expects string. Using placeholder.`);
+          dataForConverter = `[Binary File Placeholder: ${uf.name}]`;
         } else {
-          console.error(`Unexpected data type for file ${uf.name} when preparing for ConverterService.`);
+          console.error(`[Orchestrator] Unexpected data type for file ${uf.name} when preparing for ConverterService.`);
           dataForConverter = `[Error: Unexpected data type for ${uf.name}]`;
         }
         return { name: uf.name, data: dataForConverter, mimeType: uf.mimeType };
@@ -217,14 +188,14 @@ export class FileUploadComponent {
       this.converter.convertImscc(imsccFilesForConverter)
         .pipe(
           finalize(() => {
-            console.log('IMSCC conversion stream finalize.');
-            if (!this.errorMessage) { // Only clear loading/set success if no error occurred during conversion
+            console.log('[Orchestrator] IMSCC conversion stream finalize.');
+            if (!this.errorMessage) {
                  this.isProcessing = false;
                  this.loadingMessage = '';
                  this.successMessage = `Conversion complete. Found ${accumulatedAssignments.length} items. Ready for submission.`;
             }
             this.assignments = [...accumulatedAssignments];
-            console.log('Final assignments structure after conversion:', this.assignments);
+            console.log('[Orchestrator] Final assignments structure after conversion:', this.assignments);
             this.changeDetectorRef.markForCheck();
           })
         )
@@ -233,17 +204,17 @@ export class FileUploadComponent {
             accumulatedAssignments.push(assignment);
           },
           error: (error) => {
-            console.error('Error during IMSCC conversion stream:', error);
-            this.errorMessage = `Conversion Error: ${error?.message || error}`;
-            this.isProcessing = false; // Ensure processing stops on error
+            console.error('[Orchestrator] Error during IMSCC conversion stream:', error);
+            this.errorMessage = `Conversion Error: ${error?.message || String(error)}`;
+            this.isProcessing = false;
             this.loadingMessage = '';
             this.changeDetectorRef.markForCheck();
           }
         });
 
     } catch (error: any) {
-      console.error('Error during the unzipping or IMSCC conversion process:', error);
-      this.errorMessage = `Unzip/Read Error: ${error?.message || error}`;
+      console.error('[Orchestrator] Error during the unzipping or IMSCC conversion process:', error);
+      this.errorMessage = `Unzip/Read Error: ${error?.message || String(error)}`;
       this.assignments = [];
       this.isProcessing = false;
       this.loadingMessage = '';
@@ -253,7 +224,7 @@ export class FileUploadComponent {
 
   process(selectedContent: SubmissionData) {
     if (this.isProcessing) {
-        console.warn("Cannot start processing assignments while another operation is in progress.");
+      console.warn("[Orchestrator] Cannot start processing assignments while another operation is in progress.");
         this.errorMessage = "Processing is already underway. Please wait.";
         return;
     }
@@ -266,11 +237,11 @@ export class FileUploadComponent {
         return;
     }
 
-    console.log('Starting process function with selected content:', selectedContent);
+    console.log('[Orchestrator] Starting process function with selected content:', selectedContent);
     const token = this.auth.getGoogleAccessToken();
 
     if (!token) {
-      this.errorMessage = "Processing aborted: No Google access token available. Please log in.";
+      this.errorMessage = "[Orchestrator] Processing aborted: No Google access token available. Please log in.";
       console.error(this.errorMessage);
       return;
     }
@@ -281,20 +252,19 @@ export class FileUploadComponent {
     );
 
     if (assignmentsToProcess.length === 0) {
-      console.warn("Processing skipped: No assignments selected or found matching the provided IDs.");
+      console.warn("[Orchestrator] Processing skipped: No assignments selected or found matching the provided IDs.");
       this.errorMessage = "Could not find selected assignments to process.";
       return;
     }
 
-    // Clear previous errors for items about to be processed
     const assignmentsToProcessIds = new Set(assignmentsToProcess.map(a => a.associatedWithDeveloper?.id));
     this.assignments = this.assignments.map(a => {
         if (a.associatedWithDeveloper?.id && assignmentsToProcessIds.has(a.associatedWithDeveloper.id)) {
-          return {...a, processingError: undefined}; // Clear previous error
+          console.log(`[Orchestrator] Clearing previous error for item: ${a.title} (ID: ${a.associatedWithDeveloper.id})`);
+          return {...a, processingError: undefined};
         }
         return a;
     });
-    // Re-filter to ensure we have the cleaned items
     assignmentsToProcess = this.assignments.filter(assignment =>
       assignment.associatedWithDeveloper?.id &&
       selectedContent.assignmentIds.includes(assignment.associatedWithDeveloper.id)
@@ -302,151 +272,173 @@ export class FileUploadComponent {
 
 
     const courseName = this.converter.coursename || 'Untitled Course';
-    console.log(`Processing ${assignmentsToProcess.length} selected assignments for course: "${courseName}"`);
-    console.log(`Target Classroom IDs: ${selectedContent.classroomIds.join(', ')}`);
+    console.log(`[Orchestrator] Processing ${assignmentsToProcess.length} selected assignments for course: "${courseName}"`);
+    console.log(`[Orchestrator] Target Classroom IDs: ${selectedContent.classroomIds.join(', ')}`);
 
     this.isProcessing = true;
-    this.loadingMessage = `Processing ${assignmentsToProcess.length} assignment(s)... (Step 1: Drive Content)`;
+    this.loadingMessage = `Processing ${assignmentsToProcess.length} assignment(s)... (Step 1: Drive Content & QTI/HTML Conversion)`;
     this.errorMessage = null;
     this.successMessage = null;
     this.changeDetectorRef.markForCheck();
 
-    // Prepare allPackageFilesForServices for QtiToFormsService and other downstream services
-    // This list should contain all files from the package, with data in string format where appropriate (e.g., base64 for images).
     const allPackageFilesForServices: ImsccFile[] = this.unzippedFiles.map(uf => {
-      if (typeof uf.data === 'string') { // This includes base64 data URIs for images and text for XML/HTML
+      if (typeof uf.data === 'string') {
             return { name: uf.name, data: uf.data, mimeType: uf.mimeType };
-        } else { // It's ArrayBuffer (for non-image, non-text binary files not converted to base64 in initial unzip)
-          // QtiToFormsService uses this list primarily for path resolution of resources.
-          // Images it needs will already be base64 strings in this.unzippedFiles.
-          // For other binary files, a placeholder string for 'data' is fine.
-          console.warn(`File "${uf.name}" (mime: ${uf.mimeType}) is ArrayBuffer. Providing placeholder data string for QtiToFormsService's allPackageFiles.`);
+      } else {
           return {name: uf.name, data: `[Binary data placeholder for ${uf.name}]`, mimeType: uf.mimeType};
         }
     });
 
-
     this.processAssignmentsAndCreateContent(courseName, assignmentsToProcess, token, allPackageFilesForServices).pipe(
       tap(driveProcessingResults => {
-        console.log('Drive processing results (Uploads/Doc/Form Creation):', driveProcessingResults);
-        // Update assignments with any errors from Drive processing
+        console.log('[Orchestrator] Drive content/conversion stage completed. Results:', JSON.stringify(driveProcessingResults, null, 2));
         this.assignments = this.assignments.map(assignment => {
           const result = driveProcessingResults.find(r => r.itemId === assignment.associatedWithDeveloper?.id);
           if (result && result.error) {
-            const errorDetails = result.error as StagedProcessingError; // Cast to ensure type
+            console.warn(`[Orchestrator] Item "${assignment.title}" (ID: ${result.itemId}) encountered error during Drive/Conversion stage: ${result.error.message}`);
+            const errorDetails = result.error as StagedProcessingError;
             return {
               ...assignment,
               processingError: {
-                message: errorDetails.message || 'Drive operation failed.',
-                stage: errorDetails.stage || 'Drive Operation',
+                message: errorDetails.message || 'Drive/Conversion operation failed.',
+                stage: errorDetails.stage || 'Drive/Conversion Operation',
                 details: errorDetails.details
               }
             };
           }
           return assignment;
         });
+        console.log('[Orchestrator] Assignments after updating with Drive/Conversion stage errors:', JSON.stringify(this.assignments.filter(a => assignmentsToProcessIds.has(a.associatedWithDeveloper?.id)), null, 2));
         this.changeDetectorRef.markForCheck();
 
         const itemErrors = driveProcessingResults.filter(r => !!r.error);
         if (itemErrors.length > 0) {
-            console.warn(`Drive processing completed with ${itemErrors.length} item-level errors.`);
-          // Potentially update UI to reflect partial success or specific item failures
+          console.warn(`[Orchestrator] Drive/Conversion stage completed with ${itemErrors.length} item-level errors.`);
         }
-        this.loadingMessage = 'Associating content and submitting to Classroom...';
+        this.loadingMessage = 'Preparing items for Classroom...';
         this.changeDetectorRef.markForCheck();
       }),
       switchMap(driveProcessingResults => {
-        // Filter out assignments that had errors during Drive processing
-        const itemsForClassroom = this.assignments.filter(assignment =>
-            selectedContent.assignmentIds.includes(assignment.associatedWithDeveloper?.id || '') &&
-          !assignment.processingError // Only process items without prior errors
-        );
+        console.log('[Orchestrator] In switchMap after Drive/Conversion processing. Preparing items for Classroom submission.');
+
+        const itemsForClassroom = this.assignments.filter(assignment => {
+          const isSelected = assignment.associatedWithDeveloper?.id && selectedContent.assignmentIds.includes(assignment.associatedWithDeveloper.id);
+          const hasNoError = !assignment.processingError;
+          if (isSelected) console.log(`[Orchestrator] Checking item "${assignment.title}" for Classroom: Selected: ${isSelected}, HasNoError: ${hasNoError}`);
+          return isSelected && hasNoError;
+        });
+
+        console.log(`[Orchestrator] Items filtered for Classroom (selected and no prior error): ${itemsForClassroom.length} items.`);
+        if (itemsForClassroom.length > 0) {
+          console.log('[Orchestrator] First item being prepared for Classroom:', JSON.stringify(itemsForClassroom[0], null, 2));
+        }
+
 
         if (itemsForClassroom.length === 0 && assignmentsToProcess.length > 0) {
-            this.errorMessage = assignmentsToProcess.length > 0 ? "All selected items failed during Drive content creation/upload." : "No items were selected for Classroom submission.";
+          this.errorMessage = "All selected items failed during content preparation (Drive/Conversion stage).";
+          console.warn(`[Orchestrator] ${this.errorMessage}`);
             this.changeDetectorRef.markForCheck();
-          // Use 'of' to return an observable that completes the stream but indicates error
-            return of({ type: 'error' as const, source: 'Drive Processing', error: new Error(this.errorMessage), data: [...this.assignments] });
+          return throwError(() => ({type: 'error' as const, source: 'Content Preparation Stage', error: new Error(this.errorMessage || 'Unknown content preparation error'), data: [...this.assignments]}));
         }
-        if (itemsForClassroom.length === 0) { // No items to process (e.g., none selected or all failed)
-            return of({ type: 'skipped' as const, reason: 'No items to submit to Classroom', data: [...this.assignments] });
+        if (itemsForClassroom.length === 0) {
+          console.warn('[Orchestrator] No items to submit to Classroom (either none were selected for processing or all failed in content prep).');
+          return of({type: 'skipped' as const, reason: 'No items to submit to Classroom after content preparation.', data: [...this.assignments]});
         }
 
-        // Add created Drive content (Docs, Forms, Files) as materials to the assignments
         const updatedAssignmentsForClassroom = this.addContentAsMaterials(driveProcessingResults, itemsForClassroom);
-        console.log('Assignments prepared for Classroom:', updatedAssignmentsForClassroom);
+        console.log(`[Orchestrator] Assignments after addContentAsMaterials for Classroom: ${updatedAssignmentsForClassroom.length} items.`);
+        if (updatedAssignmentsForClassroom.length > 0) {
+          console.log('[Orchestrator] First assignment payload to be sent to ClassroomService:', JSON.stringify(updatedAssignmentsForClassroom[0], null, 2));
+        }
+
 
         if (!selectedContent.classroomIds || selectedContent.classroomIds.length === 0) {
-          // This case should ideally be caught earlier, but good to have a safe return
+          console.warn('[Orchestrator] No classrooms selected. Skipping Classroom submission.');
           return of({ type: 'skipped' as const, reason: 'No classrooms selected', data: [...this.assignments] });
         }
 
         this.loadingMessage = `Submitting ${updatedAssignmentsForClassroom.length} assignment(s) to ${selectedContent.classroomIds.length} classroom(s)...`;
         this.changeDetectorRef.markForCheck();
 
+        console.log(`[Orchestrator] >>> Calling ClassroomService.assignContentToClassrooms with ${updatedAssignmentsForClassroom.length} assignments for ${selectedContent.classroomIds.length} classrooms.`);
         return this.classroom.assignContentToClassrooms(token, selectedContent.classroomIds, updatedAssignmentsForClassroom).pipe(
           map(classroomResults => {
-            // Update this.assignments with the results from Classroom (e.g., links, classroom IDs)
+            console.log('[Orchestrator] Received results from ClassroomService.assignContentToClassrooms:', classroomResults);
             this.assignments = this.assignments.map(assignment => {
               const classroomResult = classroomResults.find(cr => cr.associatedWithDeveloper?.id === assignment.associatedWithDeveloper?.id);
-              return classroomResult || assignment; // If a result exists, use it, otherwise keep original
+              if (classroomResult) {
+                console.log(`[Orchestrator] Updating assignment "${assignment.title}" with Classroom result.`);
+                return classroomResult;
+              }
+              return assignment;
             });
             return { type: 'success' as const, response: classroomResults, data: [...this.assignments] };
           }),
           catchError(classroomError => {
-            const message = classroomError?.message || 'Unknown Classroom API error';
-            // Mark items that were attempted for Classroom push as errored
+            const message = classroomError?.message || 'Unknown error during Classroom submission phase.';
+            console.error(`[Orchestrator] Error from ClassroomService.assignContentToClassrooms pipeline: ${message}`, classroomError);
             this.assignments = this.assignments.map(a => {
-                if (itemsForClassroom.find(i => i.associatedWithDeveloper?.id === a.associatedWithDeveloper?.id)) {
-                  // Only add Classroom error if no Drive error existed
+              if (updatedAssignmentsForClassroom.find(i => i.associatedWithDeveloper?.id === a.associatedWithDeveloper?.id)) {
                     if (!a.processingError) {
-                        a.processingError = { message: `Classroom Batch Error: ${message}`, stage: 'Classroom Push' };
+                      a.processingError = {message: `Classroom Submission Error: ${message}`, stage: 'Classroom Push', details: classroomError.details || classroomError};
                     }
                 }
                 return a;
             });
-            return throwError(() => ({ type: 'error' as const, source: 'assignContentToClassrooms', error: new Error(message), data: [...this.assignments] }));
+            return throwError(() => ({type: 'error' as const, source: 'Classroom Submission', error: new Error(message), data: [...this.assignments], details: classroomError.details}));
           })
         );
       }),
-      catchError((pipelineError: any) => { // Catch errors from the switchMap or earlier stages
-        const source = pipelineError?.source || 'pipeline';
-        const message = pipelineError?.error?.message || pipelineError?.message || 'An unknown error occurred.';
+      catchError((pipelineError: any) => {
+        const source = pipelineError?.source || 'Content Preparation Pipeline';
+        const message = pipelineError?.error?.message || pipelineError?.message || 'An unknown error occurred in the content preparation pipeline.';
+        console.error(`[Orchestrator] Error in main processing pipeline (source: ${source}): ${message}`, pipelineError);
         this.errorMessage = `Error during ${source}: ${message}`;
-        this.assignments = pipelineError.data || this.assignments; // Ensure assignments state is updated if error object carries it
+        this.assignments = pipelineError.data && Array.isArray(pipelineError.data) ? [...pipelineError.data] : [...this.assignments];
         return of({ type: 'error' as const, source: source, error: new Error(message), data: [...this.assignments] });
       }),
       finalize(() => {
-          console.log("Drive/Classroom processing pipeline finished.");
+        console.log("[Orchestrator] Main processing pipeline finalize block.");
           this.isProcessing = false;
           this.loadingMessage = '';
           this.changeDetectorRef.markForCheck();
       })
     ).subscribe({
       next: (finalResult) => {
-        // Update assignments with the final data from the stream
+        console.log('[Orchestrator] Final result of processing pipeline:', finalResult);
         this.assignments = [...finalResult.data];
 
         if (finalResult.type === 'success') {
-          const itemsWithErrors = this.assignments.filter(a => a.processingError).length;
+          const itemsWithErrors = this.assignments.filter(a => a.processingError && selectedContent.assignmentIds.includes(a.associatedWithDeveloper?.id || '')).length;
+          const successfulItems = finalResult.response.filter(r => !r.processingError).length;
+
           if (itemsWithErrors > 0) {
             this.errorMessage = `Submission completed with ${itemsWithErrors} item(s) failing. Check item details.`;
-            this.successMessage = `Successfully processed ${this.assignments.length - itemsWithErrors} out of ${selectedContent.assignmentIds.length} selected item(s).`;
-          } else {
-            this.successMessage = `Successfully submitted ${this.assignments.length} item(s) to classroom(s).`;
+            if (successfulItems > 0) {
+              this.successMessage = `Successfully processed ${successfulItems} item(s).`;
+            } else {
+              this.successMessage = null;
+            }
+          } else if (successfulItems > 0) {
+            this.successMessage = `Successfully submitted ${successfulItems} item(s) to classroom(s).`;
             this.errorMessage = null;
+          } else {
+            this.errorMessage = "No items were successfully submitted. Please check the selection or previous errors.";
+            this.successMessage = null;
           }
+
         } else if (finalResult.type === 'skipped') {
           this.errorMessage = `Submission skipped: ${finalResult.reason}`;
           this.successMessage = null;
-        } else if (finalResult.type === 'error') { // This is for errors caught by the outer catchError
-           this.errorMessage = `Error during ${finalResult.source}: ${finalResult.error.message || 'Unknown error'}`;
+        } else if (finalResult.type === 'error') {
+          this.errorMessage = finalResult.error.message;
            this.successMessage = null;
         }
         this.changeDetectorRef.markForCheck();
       },
-      error: (err) => { // Fallback for unexpected errors not caught by the pipeline's catchError
-        const errMsg = err?.error?.message || err?.message || err?.toString() || 'An unexpected error occurred.';
+      error: (err) => {
+        const errMsg = err?.error?.message || err?.message || err?.toString() || 'An unexpected error occurred during the final processing stage.';
+        console.error('[Orchestrator] Uncaught error in subscription to process pipeline:', errMsg, err);
         this.errorMessage = `An unexpected error occurred: ${errMsg}`;
         this.successMessage = null;
         this.isProcessing = false;
@@ -461,10 +453,10 @@ export class FileUploadComponent {
     courseName: string,
     itemsToProcess: ProcessedCourseWork[],
     accessToken: string,
-    allPackageImsccFiles: ImsccFile[] // This now receives ImsccFile[] with string data
+    allPackageImsccFiles: ImsccFile[]
   ): Observable<ProcessingResult[]> {
 
-    console.log(`Starting Drive processing & content creation for ${itemsToProcess.length} items in course "${courseName}"`);
+    console.log(`[Orchestrator] processAssignmentsAndCreateContent: Starting Drive processing for ${itemsToProcess.length} items in course "${courseName}"`);
 
     if (itemsToProcess.length === 0) {
         return of([]);
@@ -472,64 +464,55 @@ export class FileUploadComponent {
 
     return from(itemsToProcess).pipe(
       concatMap((item, index) => {
-        this.loadingMessage = `Processing item ${index + 1}/${itemsToProcess.length}: ${item.title?.substring(0, 30)}... (Drive Content)`;
+        const itemLogPrefix = `[Orchestrator] Drive Processing Item ${index + 1}/${itemsToProcess.length} ("${item.title?.substring(0, 30)}..."):`;
+        this.loadingMessage = `${itemLogPrefix} (Drive Content & QTI/HTML Conversion)`;
         this.changeDetectorRef.markForCheck();
-        console.log(`Processing Item ${index + 1}/${itemsToProcess.length}: "${item.title || 'Untitled'}" (Type: ${item.workType})`);
+        console.log(`${itemLogPrefix} Start.`);
 
         const assignmentName = item.title || 'Untitled Assignment';
         const topicName = item.associatedWithDeveloper?.topic || 'General';
-        const originalAssignmentHtml = item.descriptionForDisplay;
+        let currentDescriptionForDisplay = item.descriptionForDisplay; // Use a mutable variable for HTML
         const itemId = item.associatedWithDeveloper?.id;
 
-        // filesToUpload in ProcessedCourseWork already contains {file: ImsccFile, targetFileName: string}
-        // where ImsccFile.data is string (base64 for images, text for others, or placeholder for unhandled binary)
         const filesToUploadForDrive = item.localFilesToUpload || [];
 
-        const qtiFileArray = item.qtiFile; // This is ImsccFile[] where data is string
+        const qtiFileArray = item.qtiFile;
         const qtiFileForService: ImsccFile | undefined = (qtiFileArray && qtiFileArray.length > 0) ? qtiFileArray[0] : undefined;
 
-        const shouldCreateDoc = !qtiFileForService && !!originalAssignmentHtml && item.workType === 'ASSIGNMENT' && !!item.richtext;
+        const shouldCreateDoc = !qtiFileForService && !!currentDescriptionForDisplay && item.workType === 'ASSIGNMENT' && !!item.richtext;
 
         if (!itemId) {
-          console.error(`   Skipping item "${assignmentName}" due to missing associated developer ID.`);
+          console.error(`${itemLogPrefix} Skipping item due to missing associated developer ID.`);
           return of({
             itemId: undefined, assignmentName, topicName,
             assignmentFolderId: 'ERROR_NO_ID', createdDoc: undefined, createdForm: undefined,
             uploadedFiles: undefined,
-            error: { message: 'Missing associated developer ID', stage: 'Pre-flight Check' }
+            error: {message: 'Missing associated developer ID', stage: 'Pre-flight Check (Drive/Conversion)'}
           } as ProcessingResult);
         }
 
-        console.log(`   Item ID: ${itemId}, Topic: "${topicName}", Files: ${filesToUploadForDrive.length}, Has QTI: ${!!qtiFileForService}, Create Doc: ${shouldCreateDoc}`);
+        console.log(`${itemLogPrefix} Item ID: ${itemId}, Topic: "${topicName}", Files to Upload: ${filesToUploadForDrive.length}, Has QTI: ${!!qtiFileForService}, Should Create Doc: ${shouldCreateDoc}`);
 
         return this.drive.ensureAssignmentFolderStructure(
           courseName, topicName, assignmentName, itemId, accessToken
         ).pipe(
           switchMap(assignmentFolderId => {
-            console.log(`   Drive Folder ensured/created for Item ID ${itemId}. Folder ID: ${assignmentFolderId}`);
+            console.log(`${itemLogPrefix} Drive Folder ensured/created. ID: ${assignmentFolderId}`);
 
-            // FileUploadService expects ImsccFile where data is string (base64 for images) or ArrayBuffer.
-            // Our this.unzippedFiles (source for localFilesToUpload) has images as base64 strings, others as ArrayBuffer or string.
-            // We need to map item.localFilesToUpload (which has ImsccFile.data as string) back to a structure
-            // FileUploadService can use, or adjust FileUploadService.
-            // For now, assuming FileUploadService is robust or we adjust the input here.
-            // Let's find the original UnzippedFile data for binary files.
             const filesForDriveUploadService = filesToUploadForDrive.map(ftu => {
               const originalUnzippedFile = this.unzippedFiles.find(uzf => uzf.name === ftu.file.name);
               if (originalUnzippedFile && originalUnzippedFile.data instanceof ArrayBuffer) {
-                // Use the original ArrayBuffer for FileUploadService if it's binary
                 return {file: {...ftu.file, data: originalUnzippedFile.data}, targetFileName: ftu.targetFileName};
               }
-              // If it's already a string (e.g. base64 image data URI, or text file), FileUploadService should handle it.
               return ftu;
             });
 
 
             const uploadFiles$: Observable<DriveFile[]> = filesForDriveUploadService.length > 0
               ? this.files.uploadLocalFiles(filesForDriveUploadService, accessToken, assignmentFolderId).pipe(
-                tap(uploadedFiles => console.log(`      Uploaded ${uploadedFiles.length} local file(s) for Item ID ${itemId}.`)),
+                tap(uploadedFiles => console.log(`${itemLogPrefix} Uploaded ${uploadedFiles.length} local file(s).`)),
                 catchError(uploadError => {
-                  console.error(`      ERROR uploading local files for Item ID ${itemId}:`, uploadError);
+                  console.error(`${itemLogPrefix} ERROR uploading local files:`, uploadError);
                   return throwError(() => ({
                     message: uploadError.message || 'File upload failed',
                     stage: 'File Upload',
@@ -543,19 +526,20 @@ export class FileUploadComponent {
             let createContent$: Observable<DriveFile | Material | null>;
 
             if (qtiFileForService) {
-              this.loadingMessage = `Processing item ${index + 1}/${itemsToProcess.length}: ${item.title?.substring(0, 30)}... (Creating Form)`;
+              this.loadingMessage = `${itemLogPrefix} (Creating Form from QTI)`;
               this.changeDetectorRef.markForCheck();
+              console.log(`${itemLogPrefix} QTI file found. Calling QtiToFormsService.`);
               createContent$ = this.qti.createFormFromQti(
-                qtiFileForService, // ImsccFile with string data (XML content)
-                allPackageImsccFiles, // Full list, QTI service will find images (base64 strings)
+                qtiFileForService,
+                allPackageImsccFiles,
                 assignmentName,
                 accessToken,
                 itemId,
                 assignmentFolderId
               ).pipe(
-                tap(createdForm => console.log(`      Created Google Form for Item ID ${itemId}.`)),
+                tap(createdForm => console.log(`${itemLogPrefix} Created/Found Google Form.`)),
                 catchError(formError => {
-                  console.error(`      ERROR creating Google Form for Item ID ${itemId}:`, formError);
+                  console.error(`${itemLogPrefix} ERROR creating Google Form:`, formError);
                   return throwError(() => ({
                     message: formError.message || 'Form creation from QTI failed',
                     stage: 'Form Creation',
@@ -565,29 +549,122 @@ export class FileUploadComponent {
                 })
               );
             } else if (shouldCreateDoc) {
-              this.loadingMessage = `Processing item ${index + 1}/${itemsToProcess.length}: ${item.title?.substring(0, 30)}... (Creating Doc)`;
+              this.loadingMessage = `${itemLogPrefix} (Creating Doc from HTML)`;
               this.changeDetectorRef.markForCheck();
+              console.log(`${itemLogPrefix} No QTI, should create Doc. Waiting for file uploads to complete if any.`);
               createContent$ = uploadFiles$.pipe(
                 switchMap(uploadedDriveFiles => {
-                  let modifiedHtml = originalAssignmentHtml; // This is already processed HTML
-                  // Link replacement logic might need to be more robust if paths are complex
-                  uploadedDriveFiles.forEach((uploadedFile, idx) => {
-                    const originalFileRef = filesForDriveUploadService[idx];
-                      if (originalFileRef && uploadedFile?.id && uploadedFile?.webViewLink) {
-                          const originalFileName = originalFileRef.targetFileName;
-                          try {
-                              const decodedOriginalName = decodeURI(originalFileName);
-                              const regex = new RegExp(`href=(["'])([^"']*(?:${escapeRegExp(decodedOriginalName)}|${escapeRegExp(originalFileName)}))\\1`, 'gi');
-                              modifiedHtml = modifiedHtml.replace(regex, (match, quote, originalHref) => `href=${quote}${uploadedFile.webViewLink}${quote} target="_blank"`);
-                          } catch (e) { console.error(`Error modifying HTML for ${originalFileName}:`, e); }
-                      }
-                  });
+                  console.log(`${itemLogPrefix} File uploads completed for "${item.title}" (or none needed). Uploaded files count: ${uploadedDriveFiles.length}. Proceeding to create Doc from HTML.`);
+
+                  // --- Start Unified Placeholder Replacement Logic ---
+                  if (currentDescriptionForDisplay) {
+                    console.log(`${itemLogPrefix} HTML content present. Attempting to replace all placeholders in HTML for "${item.title}". Original HTML length: ${currentDescriptionForDisplay.length}`);
+                    try {
+                      const parser = new DOMParser();
+                      const htmlDoc = parser.parseFromString(currentDescriptionForDisplay, 'text/html');
+                      const body = htmlDoc.body || htmlDoc.documentElement;
+                      const spansToReplace: {span: HTMLSpanElement, newLinkElement: HTMLParagraphElement}[] = [];
+
+                      // 1. Process all SPAN placeholders (general files, images, and now videos)
+                      body.querySelectorAll('span').forEach(span => {
+                        const spanText = span.textContent || "";
+                        let replacementMadeForThisSpan = false;
+
+                        // Try Video Placeholder First (due to its specific class and text structure)
+                        if (span.classList.contains('imscc-video-placeholder-text')) {
+                          const videoMatch = spanText.match(/\[VIDEO_PLACEHOLDER REF_NAME="([^"]+)" DISPLAY_TITLE="([^"]+)"\]/);
+                          if (videoMatch) {
+                            const originalVideoSrcDecoded = videoMatch[1]; // Already decoded by ConverterService
+                            const displayTitleDecoded = videoMatch[2];     // Already decoded
+                            console.log(`${itemLogPrefix} Found video placeholder SPAN: REF_NAME="${originalVideoSrcDecoded}", DISPLAY_TITLE="${displayTitleDecoded}"`);
+
+                            let matchedDriveFile: DriveFile | undefined;
+                            for (const ftu of filesForDriveUploadService) {
+                              const decodedFtuName = this.util.tryDecodeURIComponent(ftu.file.name);
+                              if (decodedFtuName === originalVideoSrcDecoded) {
+                                matchedDriveFile = uploadedDriveFiles.find(udf => udf.name === ftu.targetFileName);
+                                if (matchedDriveFile) {
+                                  console.log(`${itemLogPrefix} Matched video SPAN REF_NAME "${originalVideoSrcDecoded}" to DriveFile "${matchedDriveFile.name}" (target: "${ftu.targetFileName}") with link ${matchedDriveFile.webViewLink}`);
+                                }
+                                break;
+                              }
+                            }
+                            if (matchedDriveFile?.webViewLink) {
+                              const p = htmlDoc.createElement('p');
+                              const a = htmlDoc.createElement('a');
+                              a.href = matchedDriveFile.webViewLink; a.target = '_blank'; a.rel = 'noopener noreferrer';
+                              a.textContent = `Video: ${displayTitleDecoded}`;
+                              p.appendChild(a);
+                              spansToReplace.push({span, newLinkElement: p});
+                              replacementMadeForThisSpan = true;
+                            } else {
+                              console.warn(`${itemLogPrefix} Could not find uploaded Drive file or webViewLink for video placeholder SPAN REF_NAME="${originalVideoSrcDecoded}". Placeholder SPAN will remain.`);
+                            }
+                          }
+                        }
+
+                        // If not a video placeholder or video replacement failed, try general image/file placeholders
+                        if (!replacementMadeForThisSpan) {
+                          for (const uploadedDriveFile of uploadedDriveFiles) {
+                            const originalFileDetail = filesForDriveUploadService.find(ftu => ftu.targetFileName === uploadedDriveFile.name);
+                            if (originalFileDetail && uploadedDriveFile.webViewLink) {
+                              const targetFileName = originalFileDetail.targetFileName;
+
+                              const imagePlaceholderMatch = spanText.match(/\[Image:\s*(.+?)\s*-\s*will be attached separately\]/i);
+                              if (imagePlaceholderMatch && imagePlaceholderMatch[1].trim() === targetFileName) {
+                                const p = htmlDoc.createElement('p');
+                                const a = htmlDoc.createElement('a');
+                                a.href = uploadedDriveFile.webViewLink; a.target = '_blank'; a.rel = 'noopener noreferrer';
+                                a.textContent = `Image: ${decode(targetFileName)}`;
+                                p.appendChild(a);
+                                spansToReplace.push({span, newLinkElement: p});
+                                replacementMadeForThisSpan = true;
+                                break;
+                              }
+
+                              const filePlaceholderMatch = spanText.match(/\[Attached File:\s*(.+?)\]/i);
+                              if (filePlaceholderMatch && filePlaceholderMatch[1].trim() === targetFileName) {
+                                const originalLinkText = decode(spanText.substring(0, filePlaceholderMatch.index).trim() || `File: ${targetFileName}`);
+                                const p = htmlDoc.createElement('p');
+                                const a = htmlDoc.createElement('a');
+                                a.href = uploadedDriveFile.webViewLink; a.target = '_blank'; a.rel = 'noopener noreferrer';
+                                a.textContent = originalLinkText;
+                                p.appendChild(a);
+                                spansToReplace.push({span, newLinkElement: p});
+                                replacementMadeForThisSpan = true;
+                                break;
+                              }
+                            }
+                          }
+                        }
+                      });
+
+                      // Perform DOM modifications after iterating
+                      spansToReplace.forEach(rep => {
+                        if (rep.span.parentNode) {
+                          rep.span.parentNode.replaceChild(rep.newLinkElement, rep.span);
+                          console.log(`${itemLogPrefix} Replaced placeholder SPAN with link: ${rep.newLinkElement.outerHTML}`);
+                        }
+                      });
+
+                      currentDescriptionForDisplay = body.innerHTML;
+                      console.log(`${itemLogPrefix} HTML after all placeholder replacements. New length: ${currentDescriptionForDisplay.length}`);
+
+                    } catch (e) {
+                      console.error(`${itemLogPrefix} Error during HTML DOM manipulation for placeholder replacement:`, e);
+                    }
+                  } else {
+                    console.log(`${itemLogPrefix} No HTML content to modify for "${item.title}".`);
+                  }
+                  // --- End Unified Placeholder Replacement Logic ---
+
                   return this.docs.createDocFromHtml(
-                    modifiedHtml, assignmentName, accessToken, itemId, assignmentFolderId
+                    currentDescriptionForDisplay || '',  // Ensure string, even if null/undefined
+                    assignmentName, accessToken, itemId, assignmentFolderId
                   ).pipe(
-                    tap(createdDoc => console.log(`      Created Google Doc for Item ID ${itemId}.`)),
+                    tap(createdDoc => console.log(`${itemLogPrefix} Created/Found Google Doc.`)),
                     catchError(docError => {
-                      console.error(`      ERROR creating Google Doc for Item ID ${itemId}:`, docError);
+                      console.error(`${itemLogPrefix} ERROR creating Google Doc:`, docError);
                       return throwError(() => ({
                         message: docError.message || 'Document creation from HTML failed',
                         stage: 'Document Creation',
@@ -599,6 +676,7 @@ export class FileUploadComponent {
                 })
               );
             } else {
+              console.log(`${itemLogPrefix} No QTI and not creating Doc. Content creation step is null.`);
               createContent$ = of(null);
             }
 
@@ -616,6 +694,7 @@ export class FileUploadComponent {
                         createdForm = createdContentResult as Material;
                     }
                 }
+                console.log(`${itemLogPrefix} Drive content creation/finding complete. Doc: ${!!createdDoc}, Form: ${!!createdForm}, Files: ${uploadedFilesResult.length}`);
                 return {
                   itemId: itemId, assignmentName, topicName, assignmentFolderId,
                   createdDoc, createdForm,
@@ -626,16 +705,16 @@ export class FileUploadComponent {
             );
           }),
           catchError((errorDetails: any) => {
-            const stage = errorDetails?.stage || 'Folder Creation';
-            const errorMessage = errorDetails?.message || errorDetails?.error?.message || 'Unknown error during item processing';
+            const stage = errorDetails?.stage || 'Folder Creation (Drive)';
+            const errorMessageText = errorDetails?.message || errorDetails?.error?.message || 'Unknown error during item Drive processing';
             const errorDetailsString = errorDetails?.details || errorDetails?.error?.toString() || errorDetails.toString();
 
-            console.error(`   ERROR processing Item "${assignmentName}" (ID: ${itemId}): Failed at Stage: ${stage}`, errorMessage);
+            console.error(`${itemLogPrefix} ERROR during Drive processing. Stage: ${stage}, Message: ${errorMessageText}`);
             return of({
               itemId: itemId, assignmentName, topicName,
-              assignmentFolderId: 'ERROR', createdDoc: undefined, createdForm: undefined,
+              assignmentFolderId: 'ERROR_DRIVE_PROCESSING', createdDoc: undefined, createdForm: undefined,
               uploadedFiles: undefined,
-              error: { message: errorMessage, stage: stage, details: errorDetailsString }
+              error: {message: errorMessageText, stage: stage, details: errorDetailsString}
             } as ProcessingResult);
           })
         );
@@ -644,16 +723,42 @@ export class FileUploadComponent {
     );
   }
 
+  private getMaterialKey(material: Material): string | null {
+    if (material.driveFile?.driveFile?.id) return `drive-${material.driveFile.driveFile.id}`;
+    if (material.youtubeVideo?.id) return `youtube-${material.youtubeVideo.id}`;
+    if (material.link?.url) return `link-${material.link.url}`;
+    if (material.form?.formUrl) return `form-${material.form.formUrl}`;
+    return null;
+  }
+
+  private deduplicateMaterials(materials: Material[]): Material[] {
+    if (!materials || materials.length === 0) return [];
+    const seenKeys = new Set<string>();
+    const uniqueMaterials: Material[] = [];
+    for (const material of materials) {
+      const key = this.getMaterialKey(material);
+      if (key !== null && !seenKeys.has(key)) {
+        seenKeys.add(key);
+        uniqueMaterials.push(material);
+      } else if (key === null) {
+        console.warn('[Orchestrator] deduplicateMaterials: Encountered material with no identifiable key, including as is.', material);
+        uniqueMaterials.push(material);
+      } else {
+        // console.log(`[Orchestrator] deduplicateMaterials: Duplicate material skipped (Key: ${key})`);
+      }
+    }
+    return uniqueMaterials;
+  }
+
 
   addContentAsMaterials(
     processingResults: ProcessingResult[],
     courseWorkItemsToUpdate: ProcessedCourseWork[]
   ): ProcessedCourseWork[] {
-    console.log('Associating Drive content (Docs/Forms/Files) as Materials to CourseWork items...');
+    console.log('[Orchestrator] addContentAsMaterials: Associating Drive content as Materials...');
     const courseWorkMap = new Map<string, ProcessedCourseWork>();
     courseWorkItemsToUpdate.forEach(item => {
       if (item.associatedWithDeveloper?.id) {
-        // Ensure materials array exists and is a fresh copy for modification
         courseWorkMap.set(item.associatedWithDeveloper.id, { ...item, materials: [...(item.materials || [])] });
       }
     });
@@ -662,94 +767,96 @@ export class FileUploadComponent {
       if (result.itemId) {
         const courseWorkItem = courseWorkMap.get(result.itemId);
         if (courseWorkItem) {
-          if (result.error) {
-            const errorObj = result.error as StagedProcessingError;
-            courseWorkItem.processingError = { // Ensure this matches your ProcessedCourseWork interface
-                message: errorObj.message || 'An error occurred during Drive operations.',
-                stage: errorObj.stage || 'Drive Operation',
-                details: errorObj.details || (typeof result.error === 'string' ? result.error : JSON.stringify(result.error))
-            };
-            console.warn(`   [Material Association] Item ID ${result.itemId} has processing error: ${errorObj.message} at stage ${errorObj.stage}`);
-            return; // Skip adding materials if there was an error for this item
+          const itemLogPrefix = `[Orchestrator] Material Association for Item "${courseWorkItem.title}" (ID: ${result.itemId}):`;
+
+          if (!courseWorkItem.materials) {
+            courseWorkItem.materials = [];
           }
 
-          console.log(`   Updating materials for Item "${courseWorkItem.title}" (ID: ${result.itemId})`);
-          if (!courseWorkItem.materials) courseWorkItem.materials = []; // Should be initialized above
-          const addedMaterialNames: string[] = [];
-          let primaryContentMaterial: Material | null = null;
+          console.log(`${itemLogPrefix} Updating materials. Current material count: ${courseWorkItem.materials.length}`);
+          const initialMaterialCount = courseWorkItem.materials.length;
+          const addedMaterialNamesThisPass: string[] = [];
+          let primaryContentMaterialThisPass: Material | null = null;
 
-          // Add created Google Doc as material (studentCopy)
           if (result.createdDoc?.id && result.createdDoc?.name) {
             const docMaterial: Material = { driveFile: { driveFile: { id: result.createdDoc.id, title: result.createdDoc.name }, shareMode: 'STUDENT_COPY' } };
-            courseWorkItem.materials.push(docMaterial);
-            addedMaterialNames.push(`"${result.createdDoc.name}" (Doc)`);
-            primaryContentMaterial = docMaterial;
+            if (!courseWorkItem.materials.some(m => m.driveFile?.driveFile?.id === result.createdDoc?.id)) {
+              courseWorkItem.materials.push(docMaterial);
+              addedMaterialNamesThisPass.push(`"${result.createdDoc.name}" (Doc)`);
+              if (!primaryContentMaterialThisPass) primaryContentMaterialThisPass = docMaterial;
+            }
           }
 
-          // Add created Google Form as material (link)
           if (result.createdForm?.form?.formUrl) {
             const formMaterial: Material = {link: {url: result.createdForm.form.formUrl, title: result.createdForm.form.title || result.assignmentName}};
-            courseWorkItem.materials.push(formMaterial);
-            addedMaterialNames.push(`"${result.createdForm.form.title || result.assignmentName}" (Form)`);
-            primaryContentMaterial = formMaterial; // Prioritize Form if both Doc and Form exist for some reason
+            if (!courseWorkItem.materials.some(m => m.link?.url === result.createdForm?.form?.formUrl)) {
+              courseWorkItem.materials.push(formMaterial);
+              addedMaterialNamesThisPass.push(`"${result.createdForm.form.title || result.assignmentName}" (Form)`);
+              if (!primaryContentMaterialThisPass) primaryContentMaterialThisPass = formMaterial;
+            }
           }
 
-          // Add uploaded files as materials (view only), excluding the main doc if it was one of the uploaded files
           const filesToAddAsMaterials = result.uploadedFiles || [];
           if (filesToAddAsMaterials.length > 0) {
             filesToAddAsMaterials.forEach(uploadedFile => {
               if (uploadedFile?.id && uploadedFile?.name) {
-                // Avoid re-adding the main Google Doc if it was created from an HTML file that was also in localFilesToUpload
                 if (!(result.createdDoc?.id === uploadedFile.id)) {
+                  if (!courseWorkItem.materials!.some(m => m.driveFile?.driveFile?.id === uploadedFile.id)) {
                     const fileMaterial: Material = { driveFile: { driveFile: { id: uploadedFile.id, title: uploadedFile.name }, shareMode: 'VIEW' } };
-                  if (!courseWorkItem.materials) courseWorkItem.materials = []; // Should be initialized
-                    courseWorkItem.materials.push(fileMaterial);
-                    addedMaterialNames.push(`"${uploadedFile.name}"`);
+                    courseWorkItem.materials!.push(fileMaterial);
+                    addedMaterialNamesThisPass.push(`"${uploadedFile.name}"`);
+                  }
                 }
               }
             });
           }
 
-          // Update description based on added materials
-          if (addedMaterialNames.length > 0 && !courseWorkItem.descriptionForClassroom?.trim()) { // Only update if description is empty
+          courseWorkItem.materials = this.deduplicateMaterials(courseWorkItem.materials);
+
+
+          if (addedMaterialNamesThisPass.length > 0 && !courseWorkItem.descriptionForClassroom?.trim()) {
               let materialDescription: string;
-              if (primaryContentMaterial) {
-                if (primaryContentMaterial.driveFile) { // It's a Doc
-                      materialDescription = `Please review the attached document: ${addedMaterialNames[0]}.`;
-                  } else if (primaryContentMaterial.link && primaryContentMaterial.link.url.includes('google.com/forms')) { // It's a Form
-                      materialDescription = `Please complete the attached form: ${addedMaterialNames[0]}.`;
-                  } else { // Other primary content (e.g. first uploaded file if no doc/form)
-                       materialDescription = `Please see the attached content: ${addedMaterialNames[0]}.`;
+            if (primaryContentMaterialThisPass) {
+              if (primaryContentMaterialThisPass.driveFile) {
+                materialDescription = `Please review the attached document: ${addedMaterialNamesThisPass[0]}.`;
+              } else if (primaryContentMaterialThisPass.link && primaryContentMaterialThisPass.link.url.includes('google.com/forms')) {
+                materialDescription = `Please complete the attached form: ${addedMaterialNamesThisPass[0]}.`;
+              } else {
+                materialDescription = `Please see the attached content: ${addedMaterialNamesThisPass[0]}.`;
                   }
-                // Append other files if any
-                  if (addedMaterialNames.length > 1) {
-                    const otherFiles = addedMaterialNames.slice(1); // Get all other material names
+                if (addedMaterialNamesThisPass.length > 1) {
+                  const otherFiles = addedMaterialNamesThisPass.slice(1);
                       if (otherFiles.length > 0) {
                          materialDescription += ` Additional file(s): ${otherFiles.join(', ')}.`;
                       }
                   }
-              } else { // No primary Doc/Form, just uploaded files
-                  if (addedMaterialNames.length === 1) materialDescription = `Please see the attached file: ${addedMaterialNames[0]}.`;
-                  else materialDescription = `Please see the attached files (${addedMaterialNames.length}): ${addedMaterialNames.join(', ')}.`;
+              } else {
+                if (addedMaterialNamesThisPass.length === 1) materialDescription = `Please see the attached file: ${addedMaterialNamesThisPass[0]}.`;
+                else materialDescription = `Please see the attached files (${addedMaterialNamesThisPass.length}): ${addedMaterialNamesThisPass.join(', ')}.`;
               }
               courseWorkItem.descriptionForClassroom = materialDescription;
-          } else if (addedMaterialNames.length > 0) {
-            console.log(`      Materials added for "${courseWorkItem.title}", but keeping existing classroom description.`);
+            console.log(`${itemLogPrefix} Set classroom description based on new materials: "${materialDescription}"`);
+          } else if (addedMaterialNamesThisPass.length > 0) {
+            console.log(`${itemLogPrefix} ${addedMaterialNamesThisPass.length} new material(s) associated. Kept existing classroom description.`);
+          } else if (courseWorkItem.materials.length > initialMaterialCount) {
+            console.log(`${itemLogPrefix} Materials were re-associated or already present. No new materials added in this specific pass. Kept existing classroom description.`);
           } else {
-            console.log(`      No new materials were added for "${courseWorkItem.title}". Keeping original description.`);
+            console.log(`${itemLogPrefix} No new materials were added. Keeping original description.`);
           }
+          console.log(`${itemLogPrefix} Final material count: ${courseWorkItem.materials.length}`);
+
 
         } else {
-          console.warn(`   [Material Association] Could not find matching CourseWork item in map for ProcessingResult with itemId: ${result.itemId}.`);
+          console.warn(`[Orchestrator] addContentAsMaterials: Could not find matching CourseWork item in map for ProcessingResult with itemId: ${result.itemId}.`);
         }
       } else if (result.error) {
-        console.error(`   [Material Association] Skipping material addition for item ID ${result.itemId || 'Unknown'} due to processing error:`, result.error);
+        console.error(`[Orchestrator] addContentAsMaterials: Skipping material addition for item ID ${result.itemId || 'Unknown'} due to processing error:`, result.error);
       } else if (!result.itemId) {
-        console.error(`   [Material Association] Skipping material addition for item "${result.assignmentName}" because it had no ID.`);
+        console.error(`[Orchestrator] addContentAsMaterials: Skipping material addition for item "${result.assignmentName}" because it had no ID.`);
       }
     });
 
-    console.log('Finished associating materials.');
+    console.log('[Orchestrator] addContentAsMaterials: Finished associating materials.');
     return Array.from(courseWorkMap.values());
   }
 

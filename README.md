@@ -32,3 +32,55 @@ A key component of this system is the **IMSCC Parsing Helper Service**. This ser
 ## Goal
 
 The ultimate goal is to provide a streamlined workflow for educators to transfer their existing course materials from IMSCC-compliant platforms into Google Classroom, minimizing manual effort and preserving as much of the original course structure and content fidelity as possible. The `ImsccParsingHelperService` lays the groundwork for this by making the complex IMSCC structure understandable and usable by subsequent conversion and API interaction services.
+
+
+## Installation
+
+A GCP project is needed to run this project. Billing needs to be applied to work with Firebase. Firebase hosting is used to host the application which rund client side.
+
+1. Install Firebase Cli
+```
+npm install -g firebase-tools
+```
+
+2. Create a directory
+```
+mkdir classroomrosetta
+cd classroomrosetta
+```
+
+3. Pull the github project
+```
+git clone https://github.com/xxxxxxx
+```
+
+4. Initialize Node
+```
+npm install
+```
+
+5. Initialize Firebase
+```
+firebase init
+```
+
+6. Configure the .env file
+```
+PROJECT_NAME=<Project name>
+GCLOUD_PROJECT_ID=<Project name>
+APP_NAME=<App name for angular>
+DIST_PATH=<Distribution path>
+FIREBASE_API_KEY=<Firebase API key from the firebase console>
+FIREBASE_AUTH_DOMAIN=<firebase domain>
+FIREBASE_PROJECT_ID=<Project name>
+FIREBASE_STORAGE_BUCKET=<Firebase storage Bucket>
+FIREBASE_MESSAGING_SENDER_ID=<Firebase messaging sender id>
+FIREBASE_APP_ID=<Firebase app id>
+FIREBASE_CLIENT_ID=<Firebase client id>
+APPS_SCRIPT_EXECUTION_API_URL=<Deployed Apps Script API URL>
+```
+
+7. Deploy using the Gulp Command
+```
+gulp fullSetupAndDeploy
+```

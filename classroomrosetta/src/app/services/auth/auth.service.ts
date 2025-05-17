@@ -38,7 +38,8 @@ const SCOPES = [
   "https://www.googleapis.com/auth/classroom.topics",
   "https://www.googleapis.com/auth/classroom.coursework.me",
   "https://www.googleapis.com/auth/classroom.courseworkmaterials",
-  "https://www.googleapis.com/auth/classroom.coursework.students"
+  "https://www.googleapis.com/auth/classroom.coursework.students",
+  "https://www.googleapis.com/auth/script.external_request"
 ];
 
 // Key for storing the Google OAuth Access Token in session storage
