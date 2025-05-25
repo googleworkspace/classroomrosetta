@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-import { Injectable } from '@angular/core';
-import { decode as htmlEntitiesDecode } from 'html-entities';
-import { ImsccFile } from '../../../interfaces/classroom-interface'; // Adjust path
+import {Injectable} from '@angular/core';
+import {decode as htmlEntitiesDecode} from 'html-entities';
+import {ImsccFile} from '../../../interfaces/classroom-interface'; // Adjust path
 
 @Injectable({
   providedIn: 'root'
@@ -178,13 +178,13 @@ export class ImsccParsingHelperService {
       // Find the actual title string within 'title' (can be 'langstring' or 'string')
       let stringElement: Element | null = null;
       if (lomNamespace === this.IMSMD_V1P2_NS || lomNamespace === '*') { // IMSMD uses langstring
-         stringElement = titleElement.getElementsByTagNameNS(this.IMSMD_V1P2_NS, 'langstring')[0] as Element | null ||
-                         titleElement.getElementsByTagName('langstring')[0] as Element | null;
+        stringElement = titleElement.getElementsByTagNameNS(this.IMSMD_V1P2_NS, 'langstring')[0] as Element | null ||
+          titleElement.getElementsByTagName('langstring')[0] as Element | null;
       }
       if (!stringElement) { // Try 'string' element as fallback or for other LOM versions
         stringElement = (lomNamespace && lomNamespace !== '*') ?
-                        titleElement.getElementsByTagNameNS(lomNamespace!, 'string')[0] as Element | null :
-                        titleElement.getElementsByTagName('string')[0] as Element | null;
+          titleElement.getElementsByTagNameNS(lomNamespace!, 'string')[0] as Element | null :
+          titleElement.getElementsByTagName('string')[0] as Element | null;
       }
 
       // If no specific string element, use the text content of the title element itself
@@ -200,59 +200,59 @@ export class ImsccParsingHelperService {
   }
 
   public extractManifestTitle(xmlDoc: XMLDocument): string | null {
-      if (!xmlDoc || !xmlDoc.documentElement) return null;
+    if (!xmlDoc || !xmlDoc.documentElement) return null;
     // Similar logic to extractTitleFromMetadata, but applied to the root metadata
-      try {
-          const metadataElement = xmlDoc.documentElement.getElementsByTagNameNS(this.IMSCP_V1P1_NS, 'metadata')[0] || xmlDoc.documentElement.getElementsByTagName('metadata')[0];
-          if (!metadataElement) return null;
+    try {
+      const metadataElement = xmlDoc.documentElement.getElementsByTagNameNS(this.IMSCP_V1P1_NS, 'metadata')[0] || xmlDoc.documentElement.getElementsByTagName('metadata')[0];
+      if (!metadataElement) return null;
 
-          let lomElement: Element | null = null;
-          let lomNamespace: string | null = null;
+      let lomElement: Element | null = null;
+      let lomNamespace: string | null = null;
 
-          const namespacesToTry = [this.IMSMD_V1P2_NS, this.LOMIMSCC_V1P3_NS, this.LOMIMSCC_V1P1_NS];
-          for (const ns of namespacesToTry) {
-              lomElement = metadataElement.getElementsByTagNameNS(ns, 'lom')[0] as Element | null;
-              if (lomElement) {
-                  lomNamespace = ns;
-                  break;
-              }
-          }
-          if (!lomElement) {
-              lomElement = metadataElement.getElementsByTagName('lom')[0] as Element | null;
-              if (lomElement) lomNamespace = '*';
-          }
-          if (!lomElement) return null;
-
-          const generalElement = (lomNamespace && lomNamespace !== '*') ?
-                                 lomElement.getElementsByTagNameNS(lomNamespace, 'general')[0] as Element | null :
-                                 lomElement.getElementsByTagName('general')[0] as Element | null;
-          if (!generalElement) return null;
-
-          const titleElement = (lomNamespace && lomNamespace !== '*') ?
-                               generalElement.getElementsByTagNameNS(lomNamespace, 'title')[0] as Element | null :
-                               generalElement.getElementsByTagName('title')[0] as Element | null;
-          if (!titleElement) return null;
-
-          let stringElement: Element | null = null;
-          if (lomNamespace === this.IMSMD_V1P2_NS || lomNamespace === '*') {
-            stringElement = titleElement.getElementsByTagNameNS(this.IMSMD_V1P2_NS, 'langstring')[0] as Element | null ||
-                            titleElement.getElementsByTagName('langstring')[0] as Element | null;
-          }
-          if (!stringElement && lomNamespace) {
-            stringElement = (lomNamespace !== '*') ?
-                            titleElement.getElementsByTagNameNS(lomNamespace, 'string')[0] as Element | null :
-                            titleElement.getElementsByTagName('string')[0] as Element | null;
-          }
-
-          if (!stringElement) {
-              const directTitle = titleElement.textContent?.trim();
-              return directTitle || null;
-          }
-          return stringElement.textContent?.trim() || null;
-      } catch (error) {
-          console.error('An unexpected error occurred during manifest title extraction:', error);
-          return null;
+      const namespacesToTry = [this.IMSMD_V1P2_NS, this.LOMIMSCC_V1P3_NS, this.LOMIMSCC_V1P1_NS];
+      for (const ns of namespacesToTry) {
+        lomElement = metadataElement.getElementsByTagNameNS(ns, 'lom')[0] as Element | null;
+        if (lomElement) {
+          lomNamespace = ns;
+          break;
+        }
       }
+      if (!lomElement) {
+        lomElement = metadataElement.getElementsByTagName('lom')[0] as Element | null;
+        if (lomElement) lomNamespace = '*';
+      }
+      if (!lomElement) return null;
+
+      const generalElement = (lomNamespace && lomNamespace !== '*') ?
+        lomElement.getElementsByTagNameNS(lomNamespace, 'general')[0] as Element | null :
+        lomElement.getElementsByTagName('general')[0] as Element | null;
+      if (!generalElement) return null;
+
+      const titleElement = (lomNamespace && lomNamespace !== '*') ?
+        generalElement.getElementsByTagNameNS(lomNamespace, 'title')[0] as Element | null :
+        generalElement.getElementsByTagName('title')[0] as Element | null;
+      if (!titleElement) return null;
+
+      let stringElement: Element | null = null;
+      if (lomNamespace === this.IMSMD_V1P2_NS || lomNamespace === '*') {
+        stringElement = titleElement.getElementsByTagNameNS(this.IMSMD_V1P2_NS, 'langstring')[0] as Element | null ||
+          titleElement.getElementsByTagName('langstring')[0] as Element | null;
+      }
+      if (!stringElement && lomNamespace) {
+        stringElement = (lomNamespace !== '*') ?
+          titleElement.getElementsByTagNameNS(lomNamespace, 'string')[0] as Element | null :
+          titleElement.getElementsByTagName('string')[0] as Element | null;
+      }
+
+      if (!stringElement) {
+        const directTitle = titleElement.textContent?.trim();
+        return directTitle || null;
+      }
+      return stringElement.textContent?.trim() || null;
+    } catch (error) {
+      console.error('An unexpected error occurred during manifest title extraction:', error);
+      return null;
+    }
   }
 
   public isWebLinkXml(file: ImsccFile, xmlDoc?: XMLDocument | null): boolean {
@@ -268,7 +268,7 @@ export class ImsccParsingHelperService {
         const parsedDoc: XMLDocument = parser.parseFromString(cleanData, "application/xml"); // Use application/xml
         if (!parsedDoc || !parsedDoc.documentElement || parsedDoc.querySelector('parsererror')) return false;
         docToCheck = parsedDoc;
-      } catch (e) { return false; }
+      } catch (e) {return false;}
     }
     if (!docToCheck) return false;
     // Check for webLink element using namespace or tag name
@@ -368,9 +368,9 @@ export class ImsccParsingHelperService {
 
       // Check if there is any non-whitespace content left
       if (contentWithoutComments.replace(/\s/g, '') !== '') {
-         console.log(`[ParsingHelper] Final extracted HTML Description for topic "${fileName}" (has textual content): ${contentWithoutComments.substring(0, 150)}...`);
-         // Apply basic display preprocessing
-         return this.preProcessHtmlForDisplay(contentWithoutComments);
+        console.log(`[ParsingHelper] Final extracted HTML Description for topic "${fileName}" (has textual content): ${contentWithoutComments.substring(0, 150)}...`);
+        // Apply basic display preprocessing
+        return this.preProcessHtmlForDisplay(contentWithoutComments);
       }
 
       // Log a warning if no significant text content was found
@@ -390,42 +390,42 @@ export class ImsccParsingHelperService {
    * @returns The HTML content string, or null if the file is not suitable or empty.
    */
   public extractHtmlFileContent(file: ImsccFile): string | null {
-      if (!file || typeof file.data !== 'string') {
-          console.warn(`[ParsingHelper] extractHtmlFileContent: Invalid file or data type for file: ${file?.name}`);
-          return null;
-      }
+    if (!file || typeof file.data !== 'string') {
+      console.warn(`[ParsingHelper] extractHtmlFileContent: Invalid file or data type for file: ${file?.name}`);
+      return null;
+    }
 
-      // Optionally check mime type, though .html extension is a strong indicator
-      // if (!file.mimeType?.includes('html')) {
-      //     console.warn(`[ParsingHelper] extractHtmlFileContent: File does not appear to be HTML: ${file.name}, MimeType: ${file.mimeType}`);
-      //     // Depending on strictness, you might still process it if data is string
-      // }
+    // Optionally check mime type, though .html extension is a strong indicator
+    // if (!file.mimeType?.includes('html')) {
+    //     console.warn(`[ParsingHelper] extractHtmlFileContent: File does not appear to be HTML: ${file.name}, MimeType: ${file.mimeType}`);
+    //     // Depending on strictness, you might still process it if data is string
+    // }
 
-      const rawContent = file.data;
-      console.log(`[ParsingHelper] Extracting HTML content from file: ${file.name}`);
+    const rawContent = file.data;
+    console.log(`[ParsingHelper] Extracting HTML content from file: ${file.name}`);
 
-      // HTML files themselves should ideally not be HTML-entity encoded at the top level,
-      // but content *within* them might be. Standard DOM parsing handles this.
-      // However, Common Cartridge can sometimes wrap entire file contents in XML elements
-      // which might lead to odd encoding issues. Let's apply htmlEntitiesDecode just in case
-      // it was incorrectly encoded at a higher level before being stored in file.data.
-      const decodedContent = htmlEntitiesDecode(rawContent);
+    // HTML files themselves should ideally not be HTML-entity encoded at the top level,
+    // but content *within* them might be. Standard DOM parsing handles this.
+    // However, Common Cartridge can sometimes wrap entire file contents in XML elements
+    // which might lead to odd encoding issues. Let's apply htmlEntitiesDecode just in case
+    // it was incorrectly encoded at a higher level before being stored in file.data.
+    const decodedContent = htmlEntitiesDecode(rawContent);
 
-      // Apply display preprocessing (remove artifacts, fix img links etc.)
-      const processedContent = this.preProcessHtmlForDisplay(decodedContent);
+    // Apply display preprocessing (remove artifacts, fix img links etc.)
+    const processedContent = this.preProcessHtmlForDisplay(decodedContent);
 
-       // Remove HTML comments (<-- ... -->) - important for potentially hidden content
-       const contentWithoutComments = processedContent.replace(/<!--[\s\S]*?-->/g, '').trim();
+    // Remove HTML comments (<-- ... -->) - important for potentially hidden content
+    const contentWithoutComments = processedContent.replace(/<!--[\s\S]*?-->/g, '').trim();
 
 
-      // Check if there is any non-whitespace content left after processing
-      if (contentWithoutComments.replace(/\s/g, '') === '') {
-          console.warn(`[ParsingHelper] Extracted HTML content from ${file.name} is empty or only whitespace after processing.`);
-          return null;
-      }
+    // Check if there is any non-whitespace content left after processing
+    if (contentWithoutComments.replace(/\s/g, '') === '') {
+      console.warn(`[ParsingHelper] Extracted HTML content from ${file.name} is empty or only whitespace after processing.`);
+      return null;
+    }
 
-      console.log(`[ParsingHelper] Successfully extracted HTML content from file: ${file.name} (first 250 chars): ${contentWithoutComments.substring(0, 250)}...`);
-      return contentWithoutComments;
+    console.log(`[ParsingHelper] Successfully extracted HTML content from file: ${file.name} (first 250 chars): ${contentWithoutComments.substring(0, 250)}...`);
+    return contentWithoutComments;
   }
 
 
@@ -433,7 +433,7 @@ export class ImsccParsingHelperService {
     let processedHtml = html;
     // Remove <a> tags that only wrap an <img> tag pointing to the same image source (common artifact from some LMS exports)
     const imageLinkRegex = /<a\s+[^>]*?href=(["'])([^"']*?\.(png|jpe?g|gif|bmp|svg|webp))\1[^>]*?>(?:\s*<br\s*\/?>\s*)?(<img\s+[^>]*?src=(["'])(?:[^"'>]*\/)?\2\5[^>]*?>)(?:\s*<br\s*\/?>\s*)?<\/a>/gi;
-     // Corrected regex slightly to handle paths like 'content/images/image.png'
+    // Corrected regex slightly to handle paths like 'content/images/image.png'
     const correctedImageLinkRegex = /<a\s+[^>]*?href=(["'])([^"']*?\.(png|jpe?g|gif|bmp|svg|webp))(?:\?[\s\S]*?)?\1[^>]*?>(?:\s*<br\s*\/?>\s*)?(<img\s+[^>]*?src=(["'])(?:[^"'>]*\/)?\2\5[^>]*?>)(?:\s*<br\s*\/?>\s*)?<\/a>/gi;
 
     processedHtml = processedHtml.replace(correctedImageLinkRegex, (match, _q1, _href, _ext, imgTag) => {
@@ -462,8 +462,8 @@ export class ImsccParsingHelperService {
 
 
     // Remove common empty or near-empty block elements that might clutter display
-    processedHtml = processedHtml.replace(/<p>\s*(?: ?)*\s*<\/p>/gi, ''); // Empty paragraphs
-    processedHtml = processedHtml.replace(/<div>\s*(?: ?)*\s*<\/div>/gi, ''); // Empty divs
+    processedHtml = processedHtml.replace(/<p>\s*(?: ?)*\s*<\/p>/gi, ''); // Empty paragraphs
+    processedHtml = processedHtml.replace(/<div>\s*(?: ?)*\s*<\/div>/gi, ''); // Empty divs
     // Add more specific cleaning based on observed output if needed
 
 

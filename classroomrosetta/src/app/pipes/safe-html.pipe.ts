@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-import { Pipe, PipeTransform } from '@angular/core';
-import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
+import {Pipe, PipeTransform} from '@angular/core';
+import {DomSanitizer, SafeHtml} from '@angular/platform-browser';
 
 @Pipe({
   name: 'safeHtml',
-  standalone: true // Make the pipe standalone if your component is standalone
+  standalone: true
 })
 export class SafeHtmlPipe implements PipeTransform {
 
-  constructor(private sanitizer: DomSanitizer) {}
+  constructor(private sanitizer: DomSanitizer) { }
 
   /**
    * Transforms a string containing HTML into a SafeHtml object,

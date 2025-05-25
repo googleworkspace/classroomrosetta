@@ -14,12 +14,11 @@
  * limitations under the License.
  */
 
-import { Injectable } from '@angular/core';
-import { HttpErrorResponse } from '@angular/common/http';
-import { Observable, throwError, timer, of } from 'rxjs';
-// Import the modern 'retry' operator and other necessary operators
-import { retry, delay, catchError, map } from 'rxjs/operators';
-import {decode} from 'html-entities'; // For decoding HTML entities
+import {Injectable} from '@angular/core';
+import {HttpErrorResponse} from '@angular/common/http';
+import {Observable, throwError, timer} from 'rxjs';
+import {retry} from 'rxjs/operators';
+import {decode} from 'html-entities';
 
 // Configuration interface for the retry logic (remains the same)
 export interface RetryConfig {
@@ -63,7 +62,7 @@ export class UtilitiesService {
       backoffFactor: 2,
       retryableStatusCodes: [500, 503, 504, 429]
     };
-    const retryConfig: Required<RetryConfig> = { ...defaults, ...config };
+    const retryConfig: Required<RetryConfig> = {...defaults, ...config};
     const opName = operationName ? ` (${operationName})` : '';
 
     return request$.pipe(
@@ -164,9 +163,9 @@ export class UtilitiesService {
     return window.btoa(binary);
   }
 
-   // --- MIME Type Handling ---
-   private readonly mimeMap: { [key: string]: string } = { txt: 'text/plain', html: 'text/html', htm: 'text/html', css: 'text/css', js: 'application/javascript', xml: 'text/xml', csv: 'text/csv', md: 'text/markdown', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', bmp: 'image/bmp', svg: 'image/svg+xml', webp: 'image/webp', ico: 'image/vnd.microsoft.icon', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', aac: 'audio/aac', mp4: 'video/mp4', webm: 'video/webm', avi: 'video/x-msvideo', mov: 'video/quicktime', pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', odt: 'application/vnd.oasis.opendocument.text', ods: 'application/vnd.oasis.opendocument.spreadsheet', odp: 'application/vnd.oasis.opendocument.presentation', zip: 'application/zip', rar: 'application/vnd.rar', '7z': 'application/x-7z-compressed', tar: 'application/x-tar', gz: 'application/gzip', json: 'application/json', rtf: 'application/rtf', };
-   public getMimeTypeFromExtension(filename: string): string { const extension = filename.split('.').pop()?.toLowerCase(); return extension ? (this.mimeMap[extension] || 'application/octet-stream') : 'application/octet-stream'; }
+  // --- MIME Type Handling ---
+  private readonly mimeMap: {[key: string]: string} = {txt: 'text/plain', html: 'text/html', htm: 'text/html', css: 'text/css', js: 'application/javascript', xml: 'text/xml', csv: 'text/csv', md: 'text/markdown', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', bmp: 'image/bmp', svg: 'image/svg+xml', webp: 'image/webp', ico: 'image/vnd.microsoft.icon', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', aac: 'audio/aac', mp4: 'video/mp4', webm: 'video/webm', avi: 'video/x-msvideo', mov: 'video/quicktime', pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', odt: 'application/vnd.oasis.opendocument.text', ods: 'application/vnd.oasis.opendocument.spreadsheet', odp: 'application/vnd.oasis.opendocument.presentation', zip: 'application/zip', rar: 'application/vnd.rar', '7z': 'application/x-7z-compressed', tar: 'application/x-tar', gz: 'application/gzip', json: 'application/json', rtf: 'application/rtf', };
+  public getMimeTypeFromExtension(filename: string): string {const extension = filename.split('.').pop()?.toLowerCase(); return extension ? (this.mimeMap[extension] || 'application/octet-stream') : 'application/octet-stream';}
 
 
   /**
@@ -185,8 +184,6 @@ export class UtilitiesService {
       throw new Error('Failed to generate file identifier hash.');
     }
   }
-
-  // --- NEWLY ADDED PATH HELPER FUNCTIONS ---
 
   /**
    * Attempts to decode a URI component multiple times for robustness.

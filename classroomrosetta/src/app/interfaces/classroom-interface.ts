@@ -18,7 +18,7 @@
 
 export interface Material {
   link?: {url: string; title?: string;};
-  driveFile?: {driveFile: {id: string; title: string}; shareMode: 'VIEW' | 'STUDENT_COPY' | 'EDIT' | 'DRIVE_FILE_UNSPECIFIED' };
+  driveFile?: {driveFile: {id: string; title: string}; shareMode: 'VIEW' | 'STUDENT_COPY' | 'EDIT' | 'DRIVE_FILE_UNSPECIFIED'};
   form?: {formUrl: string; title?: string;};
   youtubeVideo?: {id: string; title?: string; thumbnailUrl?: string;};
 }
@@ -172,7 +172,7 @@ export interface GoogleClassroomCoursework {
   materials: Material[];
   workType?: 'ASSIGNMENT'; // API type 'ASSIGNMENT', 'SHORT_ANSWER_QUESTION', 'MULTIPLE_CHOICE_QUESTION'
   assigneeMode: 'ALL_STUDENTS';
-  subAssignments?: GoogleClassroomCoursework[]; // This structure doesn't match the API, likely for internal grouping?
+  subAssignments?: GoogleClassroomCoursework[]; // This structure doesn't match the API, used for internal grouping.
 }
 
 /**
@@ -199,8 +199,8 @@ export interface CourseWork {
   dueDate?: GoogleDate; // Optional due date.
   dueTime?: TimeOfDay; // Optional due time.
   submissionModificationMode?: 'MODIFIABLE_UNTIL_TURNED_IN' | 'MODIFIABLE' | 'LOCKED';
-  assignment?: { studentWorkFolder?: {id: string}; }; // Additional details for assignments.
-  multipleChoiceQuestion?: { choices?: string[]; }; // Additional details for multiple choice questions.
+  assignment?: {studentWorkFolder?: {id: string};}; // Additional details for assignments.
+  multipleChoiceQuestion?: {choices?: string[];}; // Additional details for multiple choice questions.
 }
 
 /**
@@ -245,8 +245,9 @@ export interface DriveFile {
   name: string; // File name
   mimeType: string; // File MIME type
   webViewLink?: string; // URL to view the file in Drive
-  appProperties?: { [key: string]: string; };
+  appProperties?: {[key: string]: string;};
   parents?: string[];
   thumbnailLink?: string;
-  contentHints?: { thumbnail?: { image: string, mimeType: string } };
+  contentHints?: {thumbnail?: {image: string, mimeType: string}};
+  trashed?: boolean;
 }

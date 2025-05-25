@@ -14,22 +14,16 @@
  * limitations under the License.
  */
 
-import { Component, OnInit, OnDestroy, Input, Output, EventEmitter, SimpleChanges, OnChanges, inject, ChangeDetectionStrategy, ChangeDetectorRef } from '@angular/core';
-import { Subscription, EMPTY } from 'rxjs';
-import { catchError } from 'rxjs/operators';
-
-// Import FormsModule for ngModel
-import { FormsModule } from '@angular/forms';
-
-// Import Angular Material modules required by the template
-import { MatSelectModule } from '@angular/material/select'; // Use MatSelectModule
-import { MatFormFieldModule } from '@angular/material/form-field'; // Needed for mat-form-field wrapper
-import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
-
-// Import services and interfaces
-import { Classroom } from '../interfaces/classroom-interface'; // Adjust path if needed
-import { ClassroomService } from '../services/classroom/classroom.service'; // Adjust path if needed
-import { AuthService } from '../services/auth/auth.service'; // Adjust path if needed
+import {Component, OnInit, OnDestroy, Input, Output, EventEmitter, SimpleChanges, OnChanges, inject, ChangeDetectionStrategy, ChangeDetectorRef} from '@angular/core';
+import {Subscription, EMPTY} from 'rxjs';
+import {catchError} from 'rxjs/operators';
+import {FormsModule} from '@angular/forms';
+import {MatSelectModule} from '@angular/material/select'; // Use MatSelectModule
+import {MatFormFieldModule} from '@angular/material/form-field'; // Needed for mat-form-field wrapper
+import {MatProgressSpinnerModule} from '@angular/material/progress-spinner';
+import {Classroom} from '../interfaces/classroom-interface'; // Adjust path if needed
+import {ClassroomService} from '../services/classroom/classroom.service'; // Adjust path if needed
+import {AuthService} from '../services/auth/auth.service'; // Adjust path if needed
 
 @Component({
   selector: 'app-classroom-multiselect',
@@ -45,23 +39,18 @@ import { AuthService } from '../services/auth/auth.service'; // Adjust path if n
   changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class ClassroomMultiselectComponent implements OnInit, OnDestroy, OnChanges {
-  // Inject services
+
   classroomService = inject(ClassroomService);
   auth = inject(AuthService);
-  // Inject ChangeDetectorRef
   private cdRef = inject(ChangeDetectorRef);
 
   @Input() authToken: string = '';
   @Output() selectionChange = new EventEmitter<string[]>();
 
-  // --- State Changes ---
   allClassrooms: Classroom[] = [];
-  // Use an array for ngModel binding with mat-select multiple
-  selectedClassroomIds: string[] = []; // Changed from Set<string> to string[]
+  selectedClassroomIds: string[] = [];
   isLoading = false;
   errorMessage: string | null = null;
-
-  // Subscription management
   private classroomSubscription: Subscription | null = null;
 
   constructor() {
@@ -70,21 +59,21 @@ export class ClassroomMultiselectComponent implements OnInit, OnDestroy, OnChang
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['authToken'] && changes['authToken'].currentValue) {
-        this.fetchClassrooms();
+      this.fetchClassrooms();
     } else if (changes['authToken'] && !changes['authToken'].currentValue) {
-        this.resetState();
-        this.errorMessage = 'Authentication token is required to load classrooms.';
-        this.cdRef.markForCheck();
+      this.resetState();
+      this.errorMessage = 'Authentication token is required to load classrooms.';
+      this.cdRef.markForCheck();
     }
   }
 
   ngOnInit(): void {
     if (this.authToken && this.allClassrooms.length === 0) {
-       this.fetchClassrooms();
+      this.fetchClassrooms();
     } else if (!this.authToken) {
-       this.resetState();
-       this.errorMessage = 'Authentication token is required. Login again.';
-       this.cdRef.markForCheck();
+      this.resetState();
+      this.errorMessage = 'Authentication token is required. Login again.';
+      this.cdRef.markForCheck();
     }
   }
 
@@ -113,49 +102,49 @@ export class ClassroomMultiselectComponent implements OnInit, OnDestroy, OnChang
         this.errorMessage = error?.message || 'Failed to load classrooms.';
         this.isLoading = false;
         this.allClassrooms = [];
-        this.selectedClassroomIds = []; // Reset selection array on error
+        this.selectedClassroomIds = [];
         this.emitSelection();
         this.cdRef.markForCheck();
         return EMPTY;
       })
     ).subscribe({
-        next: (classrooms) => {
-            this.allClassrooms = classrooms;
-            this.isLoading = false;
-            // Optional: Preserve selection if items still exist after refresh
-            // this.selectedClassroomIds = this.selectedClassroomIds.filter(id =>
-            //    this.allClassrooms.some(c => c.id === id)
-            // );
-            this.cdRef.markForCheck();
-        },
-        error: (err) => {
-            console.error('Subscription received error (should have been caught):', err);
-            if (this.isLoading) {
-                this.isLoading = false;
-                this.cdRef.markForCheck();
-            }
-        },
-        complete: () => {
-            if (this.isLoading) {
-               this.isLoading = false;
-               this.cdRef.markForCheck();
-               this.cdRef.detectChanges();
-            }
+      next: (classrooms) => {
+        this.allClassrooms = classrooms;
+        this.isLoading = false;
+        // Optional: Preserve selection if items still exist after refresh
+        // this.selectedClassroomIds = this.selectedClassroomIds.filter(id =>
+        //    this.allClassrooms.some(c => c.id === id)
+        // );
+        this.cdRef.markForCheck();
+      },
+      error: (err) => {
+        console.error('Subscription received error (should have been caught):', err);
+        if (this.isLoading) {
+          this.isLoading = false;
+          this.cdRef.markForCheck();
         }
+      },
+      complete: () => {
+        if (this.isLoading) {
+          this.isLoading = false;
+          this.cdRef.markForCheck();
+          this.cdRef.detectChanges();
+        }
+      }
     });
   }
 
-   private resetState(): void {
-      if (this.classroomSubscription) {
-        this.classroomSubscription.unsubscribe();
-        this.classroomSubscription = null;
-      }
-      this.allClassrooms = [];
-      this.selectedClassroomIds = []; // Reset selection array
-      this.isLoading = false;
-      this.errorMessage = null;
-      this.emitSelection(); // Emit empty selection
-   }
+  private resetState(): void {
+    if (this.classroomSubscription) {
+      this.classroomSubscription.unsubscribe();
+      this.classroomSubscription = null;
+    }
+    this.allClassrooms = [];
+    this.selectedClassroomIds = [];
+    this.isLoading = false;
+    this.errorMessage = null;
+    this.emitSelection();
+  }
 
 
   /**

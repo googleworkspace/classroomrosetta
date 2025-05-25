@@ -21,7 +21,7 @@ import {getAuth, provideAuth} from '@angular/fire/auth';
 import {environment} from '../environments/environment';
 import {routes} from './app.routes';
 import {provideAnimationsAsync} from '@angular/platform-browser/animations/async';
-import {provideHttpClient, withInterceptorsFromDi} from '@angular/common/http'; // Import provideHttpClient
+import {provideHttpClient, withInterceptorsFromDi} from '@angular/common/http';
 
 
 export const appConfig: ApplicationConfig = {

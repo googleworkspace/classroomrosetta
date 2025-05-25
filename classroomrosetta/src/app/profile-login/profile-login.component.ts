@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { Component, inject, OnInit } from '@angular/core';
-import { AuthService } from '../services/auth/auth.service';
+import {Component, inject, OnInit} from '@angular/core';
+import {AuthService} from '../services/auth/auth.service';
 import {MatButtonModule} from '@angular/material/button';
 import {User} from '@angular/fire/auth';
 
@@ -27,9 +27,9 @@ import {User} from '@angular/fire/auth';
 })
 export class ProfileLoginComponent implements OnInit {
   authService = inject(AuthService)
-  user: User|null = null
-  ngOnInit(){
-    this.authService.user$.subscribe(user=>{
+  user: User | null = null
+  ngOnInit() {
+    this.authService.user$.subscribe(user => {
       this.user = user
     })
   }

@@ -15,11 +15,10 @@
  */
 
 import { Injectable, inject } from '@angular/core';
-import { HttpClient, HttpHeaders, HttpParams, HttpErrorResponse } from '@angular/common/http';
+import {HttpClient, HttpHeaders, HttpParams} from '@angular/common/http';
 import { Observable, of, throwError, from } from 'rxjs';
 import { map, catchError, switchMap, shareReplay, tap } from 'rxjs/operators';
-// Import RetryConfig from UtilitiesService
-import { UtilitiesService, RetryConfig } from '../utilities/utilities.service'; // Adjust path accordingly
+import {UtilitiesService} from '../utilities/utilities.service';
 
 /**
  * Interface for Google Drive API File resource (simplified)
@@ -55,7 +54,7 @@ export class DriveFolderService {
   private readonly ROOT_IMPORT_FOLDER_NAME = 'LMS Import';
 
   // Custom property key to store the source identifier HASH
-  private readonly ITEM_ID_HASH_PROPERTY_KEY = 'itemIdHash'; // Renamed to reflect it stores a hash
+  private readonly ITEM_ID_HASH_PROPERTY_KEY = 'itemIdHash';
 
   // Cache for the root import folder ID
   private rootImportFolderId$: Observable<string> | null = null;
@@ -88,7 +87,7 @@ export class DriveFolderService {
     // Wrap with retry logic
     return this.utils.retryRequest(
         searchRequest$,
-        { maxRetries: 3, initialDelayMs: 1000 }, // Example config
+      {maxRetries: 3, initialDelayMs: 1000},
         `Find Folder by Hash ${hashedItemId}`
     ).pipe(
       map(response => {

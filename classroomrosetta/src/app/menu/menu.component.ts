@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-import { Component, inject } from '@angular/core';
+import {Component} from '@angular/core';
 import {MatMenuModule} from '@angular/material/menu';
 import {MatToolbarModule} from '@angular/material/toolbar';
 import {MatIconModule} from '@angular/material/icon';
 import {MatButtonModule} from '@angular/material/button';
-import { ProfileLoginComponent } from '../profile-login/profile-login.component';
+import {ProfileLoginComponent} from '../profile-login/profile-login.component';
 
 @Component({
   selector: 'app-menu',

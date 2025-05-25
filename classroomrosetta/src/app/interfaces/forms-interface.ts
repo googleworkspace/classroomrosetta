@@ -311,14 +311,14 @@ export interface TimeQuestion {
 
 // For GridItem and CheckboxGridItem
 export interface Row {
-    title: string;
+  title: string;
 }
 export interface RowQuestion {
-    rows: Row[];
-    // Columns are typically handled by a ChoiceQuestion with type GRID or CHECKBOX_GRID
-    // So, your existing ChoiceQuestion might need a 'type' like 'GRID' or 'CHECKBOX_GRID'
-    // or you define columns explicitly here if your QTI parsing separates them.
-    // For now, assuming columns are part of the choiceQuestion structure within the main Question.
+  rows: Row[];
+  // Columns are typically handled by a ChoiceQuestion with type GRID or CHECKBOX_GRID
+  // So, your existing ChoiceQuestion might need a 'type' like 'GRID' or 'CHECKBOX_GRID'
+  // or you define columns explicitly here if your QTI parsing separates them.
+  // For now, assuming columns are part of the choiceQuestion structure within the main Question.
 }
 
 export interface Video {
@@ -347,8 +347,8 @@ export interface SectionHeaderItem {
 }
 
 export interface TextItem {
-    // text: string; // The actual text content, if not using title/description of FormItem
-    [key: string]: any; // Allow empty object if title/description of FormItem are used
+  // text: string; // The actual text content, if not using title/description of FormItem
+  [key: string]: any; // Allow empty object if title/description of FormItem are used
 }
 
 

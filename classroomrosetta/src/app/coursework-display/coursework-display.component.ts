@@ -14,17 +14,17 @@
  * limitations under the License.
  */
 
-import { Component, Input, Output, EventEmitter, OnChanges, SimpleChanges, ChangeDetectionStrategy, ChangeDetectorRef, OnInit } from '@angular/core';
-import { CommonModule } from '@angular/common';
-import { MatExpansionModule } from '@angular/material/expansion';
-import { MatCheckboxModule } from '@angular/material/checkbox';
-import { MatListModule } from '@angular/material/list';
-import { MatIconModule } from '@angular/material/icon';
-import { MatButtonModule } from '@angular/material/button';
-import { MatDividerModule } from '@angular/material/divider';
-import { ClassroomMultiselectComponent } from '../classroom-select/classroom-multiselect.component';
+import {Component, Input, Output, EventEmitter, OnChanges, SimpleChanges, ChangeDetectionStrategy, ChangeDetectorRef, OnInit} from '@angular/core';
+import {CommonModule} from '@angular/common';
+import {MatExpansionModule} from '@angular/material/expansion';
+import {MatCheckboxModule} from '@angular/material/checkbox';
+import {MatListModule} from '@angular/material/list';
+import {MatIconModule} from '@angular/material/icon';
+import {MatButtonModule} from '@angular/material/button';
+import {MatDividerModule} from '@angular/material/divider';
+import {ClassroomMultiselectComponent} from '../classroom-select/classroom-multiselect.component';
 
-import { ProcessedCourseWork, GroupedCoursework, SubmissionData } from '../interfaces/classroom-interface'; // Adjust path
+import {ProcessedCourseWork, GroupedCoursework, SubmissionData} from '../interfaces/classroom-interface'; // Adjust path
 
 import {SafeHtmlPipe} from '../pipes/safe-html.pipe';
 
@@ -59,21 +59,20 @@ export class CourseworkDisplayComponent implements OnChanges, OnInit {
 
   selectedClassroomIds: string[] = [];
 
-  constructor(private cdRef: ChangeDetectorRef) {}
+  constructor(private cdRef: ChangeDetectorRef) { }
 
   ngOnInit(): void {
-      if (this.assignments.length > 0) {
-         this.groupAndInitialize();
-         this.updateMasterCheckboxState();
-      }
+    if (this.assignments.length > 0) {
+      this.groupAndInitialize();
+      this.updateMasterCheckboxState();
+    }
   }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['assignments']) {
-      // console.log('CourseworkDisplayComponent ngOnChanges detected assignments change:', this.assignments?.length); // Add log
       this.groupAndInitialize();
       this.updateMasterCheckboxState();
-      this.cdRef.markForCheck(); // Trigger change detection
+      this.cdRef.markForCheck();
     }
   }
 
@@ -107,8 +106,6 @@ export class CourseworkDisplayComponent implements OnChanges, OnInit {
     this.groupedCoursework.forEach(group => this.updateTopicCheckboxState(group));
   }
 
-  // --- Selection Logic (no changes needed here) ---
-
   toggleItemSelection(itemId: string, group: GroupedCoursework): void {
     const currentState = this.selection.get(itemId);
     this.selection.set(itemId, !currentState);
@@ -120,10 +117,10 @@ export class CourseworkDisplayComponent implements OnChanges, OnInit {
   toggleTopicSelection(group: GroupedCoursework): void {
     const targetState = !group.allSelected;
     group.items.forEach(item => {
-       const itemId = item.associatedWithDeveloper?.id;
-       if (itemId) {
-         this.selection.set(itemId, targetState);
-       }
+      const itemId = item.associatedWithDeveloper?.id;
+      if (itemId) {
+        this.selection.set(itemId, targetState);
+      }
     });
     this.updateTopicCheckboxState(group);
     this.updateMasterCheckboxState();
@@ -140,32 +137,30 @@ export class CourseworkDisplayComponent implements OnChanges, OnInit {
     this.cdRef.markForCheck();
   }
 
-  // --- Checkbox State Updates (no changes needed here) ---
-
   private updateTopicCheckboxState(group: GroupedCoursework): void {
     let allSelectedInGroup = true;
     let noneSelectedInGroup = true;
 
     if (group.items.length === 0) {
-        group.allSelected = false;
-        group.indeterminate = false;
-        return;
+      group.allSelected = false;
+      group.indeterminate = false;
+      return;
     }
 
     for (const item of group.items) {
-       const itemId = item.associatedWithDeveloper?.id;
-       if (itemId) {
-         if (this.selection.get(itemId)) {
-           noneSelectedInGroup = false;
-         } else {
-           allSelectedInGroup = false;
-         }
-       } else {
-            allSelectedInGroup = false;
-       }
-       if (!allSelectedInGroup && !noneSelectedInGroup) {
-            break;
-       }
+      const itemId = item.associatedWithDeveloper?.id;
+      if (itemId) {
+        if (this.selection.get(itemId)) {
+          noneSelectedInGroup = false;
+        } else {
+          allSelectedInGroup = false;
+        }
+      } else {
+        allSelectedInGroup = false;
+      }
+      if (!allSelectedInGroup && !noneSelectedInGroup) {
+        break;
+      }
     }
 
     group.allSelected = allSelectedInGroup;
@@ -176,10 +171,10 @@ export class CourseworkDisplayComponent implements OnChanges, OnInit {
     let allSelectedOverall = true;
     let noneSelectedOverall = true;
 
-     if (this.selection.size === 0) {
-        this.isAllSelected = false;
-        this.isIndeterminate = false;
-        return;
+    if (this.selection.size === 0) {
+      this.isAllSelected = false;
+      this.isIndeterminate = false;
+      return;
     }
 
     this.selection.forEach(isSelected => {
@@ -194,19 +189,15 @@ export class CourseworkDisplayComponent implements OnChanges, OnInit {
     this.isIndeterminate = !allSelectedOverall && !noneSelectedOverall;
   }
 
-  // --- Classroom Selection Handling ---
-
   handleClassroomSelection(selectedIds: string[]): void {
     this.selectedClassroomIds = selectedIds;
     this.cdRef.markForCheck();
   }
 
-  // --- Submission ---
-
   onSubmit(): void {
     const selectedAssignmentIds = Array.from(this.selection.entries())
-                                   .filter(([_, isSelected]) => isSelected)
-                                   .map(([id, _]) => id);
+      .filter(([_, isSelected]) => isSelected)
+      .map(([id, _]) => id);
 
     const submissionData: SubmissionData = {
       classroomIds: this.selectedClassroomIds,
@@ -221,8 +212,6 @@ export class CourseworkDisplayComponent implements OnChanges, OnInit {
     return Array.from(this.selection.values()).filter(isSelected => isSelected).length;
   }
 
-  // --- Template Helpers ---
-
   getMaterialIcon(material: any): string {
     if (material.link) return 'link';
     if (material.driveFile) return 'folder_open';
@@ -233,17 +222,17 @@ export class CourseworkDisplayComponent implements OnChanges, OnInit {
 
   getMaterialTitle(material: any): string {
     return material.link?.title || material.link?.url ||
-           material.driveFile?.driveFile?.title ||
-           material.form?.title ||
-           material.youtubeVideo?.title ||
-           'Attached Material';
+      material.driveFile?.driveFile?.title ||
+      material.form?.title ||
+      material.youtubeVideo?.title ||
+      'Attached Material';
   }
 
-   getMaterialLink(material: any): string | undefined {
+  getMaterialLink(material: any): string | undefined {
     return material.link?.url ||
-           material.driveFile?.driveFile?.alternateLink ||
-           material.form?.formUrl ||
-           material.youtubeVideo?.alternateLink;
+      material.driveFile?.driveFile?.alternateLink ||
+      material.form?.formUrl ||
+      material.youtubeVideo?.alternateLink;
   }
 
   trackByGroupTopic(index: number, group: GroupedCoursework): string | undefined {
