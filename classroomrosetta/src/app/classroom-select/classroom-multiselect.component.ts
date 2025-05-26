@@ -96,7 +96,7 @@ export class ClassroomMultiselectComponent implements OnInit, OnDestroy, OnChang
       this.classroomSubscription.unsubscribe();
     }
 
-    this.classroomSubscription = this.classroomService.getActiveClassrooms(this.authToken).pipe(
+    this.classroomSubscription = this.classroomService.getActiveClassrooms().pipe(
       catchError(error => {
         console.error('Error fetching classrooms:', error);
         this.errorMessage = error?.message || 'Failed to load classrooms.';

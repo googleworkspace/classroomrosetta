@@ -15,11 +15,12 @@
  */
 
 import {Injectable, inject} from '@angular/core';
-import {HttpClient, HttpHeaders, HttpParams} from '@angular/common/http';
+import {HttpClient, HttpHeaders, HttpParams, HttpErrorResponse} from '@angular/common/http';
 import {Observable, throwError, of, from} from 'rxjs';
 import {switchMap, catchError, tap} from 'rxjs/operators';
-import {DriveFile} from '../../interfaces/classroom-interface';
-import {UtilitiesService, RetryConfig} from '../utilities/utilities.service';
+import {DriveFile} from '../../interfaces/classroom-interface'; // Assuming path is correct
+import {UtilitiesService, RetryConfig} from '../utilities/utilities.service'; // Assuming path is correct
+import {AuthService} from '../auth/auth.service'; // Import AuthService
 
 @Injectable({
   providedIn: 'root'
@@ -29,6 +30,7 @@ export class HtmlToDocsService {
   // Inject dependencies
   private http = inject(HttpClient);
   private utils = inject(UtilitiesService);
+  private auth = inject(AuthService); // Inject AuthService
 
   // Custom property key to store the source identifier HASH
   private readonly APP_PROPERTY_KEY = 'imsccIdentifier';
@@ -36,13 +38,41 @@ export class HtmlToDocsService {
   constructor() { }
 
   /**
+   * Creates Drive API headers, fetching token internally.
+   * @param isUpload Indicates if headers are for a multipart upload (no explicit Content-Type).
+   * @returns HttpHeaders object or null if token is missing.
+   */
+  private createDriveApiHeaders(isUpload: boolean = false): HttpHeaders | null {
+    const accessToken = this.auth.getGoogleAccessToken();
+    if (!accessToken) {
+      console.error('[HtmlToDocsService] Cannot create Drive API headers: Access token is missing.');
+      return null;
+    }
+    let headersConfig: {[header: string]: string | string[]} = {
+      'Authorization': `Bearer ${accessToken}`
+    };
+    // For multipart uploads (FormData), HttpClient sets Content-Type.
+    // For JSON metadata POST (like creating an empty folder, not used here directly for doc creation from HTML),
+    // 'Content-Type': 'application/json' would be needed.
+    // For GET, 'Accept: application/json' is good practice but often default.
+    // This service primarily does GET for search and POST FormData for upload.
+    if (!isUpload) { // For GET search or if we were doing a JSON POST
+      // headersConfig['Accept'] = 'application/json'; // Good practice for GET
+      // If creating doc via metadata-only POST (not the case here), would add:
+      // headersConfig['Content-Type'] = 'application/json';
+    }
+
+    return new HttpHeaders(headersConfig);
+  }
+
+
+  /**
    * Finds an existing Google Doc based on a HASH of an identifier in appProperties,
    * or creates a new one by uploading an HTML string to Google Drive.
-   * Includes retry logic for API calls.
+   * Token is fetched internally.
    *
    * @param htmlContent The HTML string to convert IF creating a new doc.
    * @param documentTitle The desired title for the new Google Doc IF creating one.
-   * @param accessToken A valid Google OAuth 2.0 access token with Drive scope.
    * @param itemId The unique identifier (e.g., IMSCC item ID) to search for or associate with the file. THIS WILL BE HASHED.
    * @param parentFolderId Optional. The ID of the Google Drive folder to place the *newly created* document into.
    * @returns Observable<DriveFile> Emitting the Google Drive File resource object (either found or newly created).
@@ -50,19 +80,13 @@ export class HtmlToDocsService {
   createDocFromHtml(
     htmlContent: string,
     documentTitle: string,
-    accessToken: string,
     itemId: string,
     parentFolderId?: string
   ): Observable<DriveFile> {
     // --- Input Validation ---
-    if (!itemId) return throwError(() => new Error('Item ID (itemId) is required (will be hashed).'));
-    if (!documentTitle) return throwError(() => new Error('Document title cannot be empty (required for creation).'));
-    if (!accessToken) return throwError(() => new Error('Access token is required.'));
-
-    // --- Prepare Headers ---
-    const headers = new HttpHeaders({
-      'Authorization': `Bearer ${accessToken}`
-    });
+    if (!itemId) return throwError(() => new Error('[HtmlToDocsService] Item ID (itemId) is required (will be hashed).'));
+    if (!documentTitle) return throwError(() => new Error('[HtmlToDocsService] Document title cannot be empty (required for creation).'));
+    // Token will be checked before each API call.
 
     // Define retry configuration
     const retryConfig: RetryConfig = {maxRetries: 3, initialDelayMs: 2000};
@@ -73,20 +97,24 @@ export class HtmlToDocsService {
       catchError(hashError => {
         console.error(`[HtmlToDocsService] Error generating hash for itemId "${itemId}":`, hashError);
         const errorMessage = hashError instanceof Error ? hashError.message : String(hashError);
-        return throwError(() => new Error(`Failed to generate identifier hash for ${itemId}. ${errorMessage}`));
+        return throwError(() => new Error(`[HtmlToDocsService] Failed to generate identifier hash for ${itemId}. ${errorMessage}`));
       }),
       switchMap(hashedItemId => {
-      // --- Step 2: Search for Existing File by HASHED appProperties (with Retry) ---
-        // The API query already includes 'trashed = false'.
+        // --- Step 2: Search for Existing File by HASHED appProperties (with Retry) ---
+        const searchHeaders = this.createDriveApiHeaders();
+        if (!searchHeaders) {
+          return throwError(() => new Error(`[HtmlToDocsService] Authentication token missing for searching doc by hash: ${hashedItemId}`));
+        }
+
         console.log(`[HtmlToDocsService] Searching for existing Drive file with ${this.APP_PROPERTY_KEY}=${hashedItemId} (hash of ${itemId})...`);
-        const searchQuery = `appProperties has { key='${this.APP_PROPERTY_KEY}' and value='${hashedItemId}' } and mimeType='application/vnd.google-apps.document' and trashed = false`;
+        const searchQuery = `appProperties has { key='${this.APP_PROPERTY_KEY}' and value='${this.utils.escapeQueryParam(hashedItemId)}' } and mimeType='application/vnd.google-apps.document' and trashed = false`;
         const searchParams = new HttpParams()
           .set('q', searchQuery)
-          .set('fields', 'files(id, name, mimeType, appProperties, webViewLink, parents, trashed)') // Ensure 'trashed' is in fields
+          .set('fields', 'files(id, name, mimeType, appProperties, webViewLink, parents, trashed)')
           .set('spaces', 'drive');
 
         const searchRequest$ = this.http.get<{files: DriveFile[]}>(
-          this.utils.DRIVE_API_FILES_ENDPOINT, {headers, params: searchParams}
+          this.utils.DRIVE_API_FILES_ENDPOINT, {headers: searchHeaders, params: searchParams}
         );
 
         return this.utils.retryRequest(
@@ -95,29 +123,32 @@ export class HtmlToDocsService {
           `Search Doc by Hash ${hashedItemId}`
         ).pipe(
           switchMap(response => {
-            // --- Step 3: Check Search Results and explicitly filter for non-trashed files ---
             const suitableFiles = response.files ? response.files.filter(f => f.trashed !== true) : [];
 
             if (suitableFiles.length > 0) {
-              // --- File Found & Not Trashed ---
               const foundFile = suitableFiles[0];
               console.log(`[HtmlToDocsService] Found existing non-trashed Google Doc for hashed item ${hashedItemId}: ID=${foundFile.id}, Name=${foundFile.name}.`);
               return of(foundFile);
             } else {
-              // --- File Not Found or All Found Files Were Trashed: Proceed with Creation (with Retry) ---
-              if (response.files && response.files.length > 0) { // Files were found by API, but our client-side filter removed them
+              if (response.files && response.files.length > 0) {
                 console.warn(`[HtmlToDocsService] Files were found for hashed item ${hashedItemId}, but all were trashed or unsuitable. Proceeding to create a new document.`);
               } else {
                 console.log(`[HtmlToDocsService] No existing Google Doc found for hashed item ${hashedItemId}. Creating new Google Doc via Drive import for "${documentTitle}"...`);
               }
 
-              if (!htmlContent) {
-                return throwError(() => new Error('HTML content is required to create a new document.'));
+              if (!htmlContent && htmlContent !== "") { // Allow empty string for an empty doc, but not null/undefined
+                return throwError(() => new Error('[HtmlToDocsService] HTML content is required to create a new document if one is not found.'));
+              }
+
+              // Fetch token for creation
+              const createHeaders = this.createDriveApiHeaders(true); // true for upload (FormData)
+              if (!createHeaders) {
+                return throwError(() => new Error(`[HtmlToDocsService] Authentication token missing for creating doc: ${documentTitle}`));
               }
 
               const metadata = {
                 name: documentTitle,
-                mimeType: 'application/vnd.google-apps.document',
+                mimeType: 'application/vnd.google-apps.document', // Important: This tells Drive to convert HTML to Google Doc
                 appProperties: {[this.APP_PROPERTY_KEY]: hashedItemId},
                 parents: parentFolderId ? [parentFolderId] : undefined
               };
@@ -125,10 +156,18 @@ export class HtmlToDocsService {
               const htmlBlob = new Blob([htmlContent], {type: 'text/html'});
               const formData = new FormData();
               formData.append('metadata', metadataBlob);
-              formData.append('file', htmlBlob);
+              formData.append('file', htmlBlob, `${documentTitle}.html`); // Provide a filename for the HTML part
+
+              // Ensure the upload endpoint is used correctly for conversion
+              // The DRIVE_API_UPLOAD_ENDPOINT should be like: 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart'
+              // We need to add 'fields' to get back the desired DriveFile properties.
+              const uploadUrlWithFields = `${this.utils.DRIVE_API_UPLOAD_ENDPOINT}${this.utils.DRIVE_API_UPLOAD_ENDPOINT.includes('?') ? '&' : '?'}fields=${encodeURIComponent('id,name,mimeType,appProperties,webViewLink,parents')}`;
+
 
               const createRequest$ = this.http.post<DriveFile>(
-                this.utils.DRIVE_API_UPLOAD_ENDPOINT, formData, {headers}
+                uploadUrlWithFields, // Use the upload endpoint
+                formData,
+                {headers: createHeaders} // HttpClient handles Content-Type for FormData
               );
 
               return this.utils.retryRequest(
@@ -137,17 +176,17 @@ export class HtmlToDocsService {
                 `Create Doc "${documentTitle}"`
               ).pipe(
                 tap(newlyCreatedFile => {
-                  if (!newlyCreatedFile?.id) throw new Error('Failed to create/convert document in Google Drive (unexpected response).');
+                  if (!newlyCreatedFile?.id) throw new Error('[HtmlToDocsService] Failed to create/convert document in Google Drive (unexpected response).');
                   console.log(`[HtmlToDocsService] Successfully created Google Doc via Drive import. ID: ${newlyCreatedFile.id}, Name: ${newlyCreatedFile.name}`);
                   console.log(`   Associated ${this.APP_PROPERTY_KEY}: ${newlyCreatedFile.appProperties?.[this.APP_PROPERTY_KEY]} (Hash of: "${itemId}")`);
                   if (parentFolderId && !newlyCreatedFile.parents?.includes(parentFolderId)) {
-                    console.warn(`[HtmlToDocsService] Document ${newlyCreatedFile.id} created, but might not be in the target folder ${parentFolderId} yet.`);
+                    console.warn(`[HtmlToDocsService] Document ${newlyCreatedFile.id} created, but parent folder might not be set as expected immediately. Expected: ${parentFolderId}, Actual: ${newlyCreatedFile.parents}`);
                   }
                 }),
                 catchError(err => {
                   const formattedError = this.utils.formatHttpError(err);
                   console.error(`[HtmlToDocsService] Error creating Google Doc from HTML for hashed item ${hashedItemId} (final after retries):`, formattedError);
-                  return throwError(() => new Error(`Failed to create Google Doc for ${documentTitle}. ${formattedError}`));
+                  return throwError(() => new Error(`[HtmlToDocsService] Failed to create Google Doc for ${documentTitle}. ${formattedError}`));
                 })
               );
             }
@@ -155,7 +194,7 @@ export class HtmlToDocsService {
           catchError(err => {
             const formattedError = this.utils.formatHttpError(err);
             console.error(`[HtmlToDocsService] Error searching for Google Doc for hashed item ${hashedItemId} (final after retries):`, formattedError);
-            return throwError(() => new Error(`Drive search failed for ${itemId}. ${formattedError}`));
+            return throwError(() => new Error(`[HtmlToDocsService] Drive search failed for ${itemId}. ${formattedError}`));
           })
         );
       })

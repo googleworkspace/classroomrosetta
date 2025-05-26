@@ -28,7 +28,7 @@ import {ClassroomService} from '../services/classroom/classroom.service';
 import {ConverterService} from '../services/converter/converter.service';
 import {DriveFolderService} from '../services/drive/drive.service';
 import {HtmlToDocsService} from '../services/html-to-docs/html-to-docs.service';
-import {FileUploadService} from '../services/file-upload/file-upload.service';
+import {FileUploadService as ActualFileUploadService} from '../services/file-upload/file-upload.service'; // Correct alias
 import {QtiToFormsService} from '../services/qti-to-forms/qti-to-forms.service';
 import {UtilitiesService} from '../services/utilities/utilities.service';
 import {AuthService} from '../services/auth/auth.service';
@@ -60,19 +60,17 @@ export interface StagedProcessingError {
   details?: any;
 }
 
-// Represents the result of processing an item's content (Drive uploads, QTI, HTML conversions)
-// before it's sent to ClassroomService.
 export interface ProcessingResult {
-  itemId: string | undefined; // IMSCC Item ID
-  assignmentName: string;     // Original assignment name
-  topicName: string;          // Topic name derived from IMSCC structure (used for Drive folder org)
-  assignmentFolderId: string; // Drive Folder ID where content was placed
-  createdDoc?: DriveFile;     // Details if a Google Doc was created from HTML
-  createdForm?: Material;     // Details if a Google Form was created from QTI (as a Material object)
-  uploadedFiles?: DriveFile[];// List of other files uploaded to Drive
-  error: StagedProcessingError | null; // Error if this stage failed for the item
-  finalHtmlDescription?: string;      // The final HTML description (e.g., after local links are converted to Drive links)
-  finalPlainTextDescription?: string; // The plain text version of the final HTML, for Classroom API
+  itemId: string | undefined;
+  assignmentName: string;
+  topicName: string;
+  assignmentFolderId: string;
+  createdDoc?: DriveFile;
+  createdForm?: Material;
+  uploadedFiles?: DriveFile[];
+  error: StagedProcessingError | null;
+  finalHtmlDescription?: string;
+  finalPlainTextDescription?: string;
 }
 
 @Component({
@@ -89,18 +87,17 @@ export class FileUploadComponent {
   selectedFile: File | null = null;
   unzippedFiles: UnzippedFile[] = [];
   @ViewChild('fileInput') fileInput: any = null;
-  assignments: ProcessedCourseWork[] = []; // Holds all ProcessedCourseWork items derived from the IMSCC package
+  assignments: ProcessedCourseWork[] = [];
   isProcessing: boolean = false;
   loadingMessage: string = '';
   errorMessage: string | null = null;
   successMessage: string | null = null;
 
-  // Injecting services
   classroom = inject(ClassroomService);
   converter = inject(ConverterService);
   drive = inject(DriveFolderService);
   docs = inject(HtmlToDocsService);
-  files = inject(FileUploadService);
+  files = inject(ActualFileUploadService); // Use correct alias
   qti = inject(QtiToFormsService);
   auth = inject(AuthService);
   util = inject(UtilitiesService);
@@ -117,7 +114,6 @@ export class FileUploadComponent {
     } else {
       this.selectedFile = null;
     }
-    // Reset state
     this.assignments = [];
     this.unzippedFiles = [];
     this.isProcessing = false;
@@ -166,15 +162,14 @@ export class FileUploadComponent {
           const promise = (async (): Promise<UnzippedFile | null> => {
             let data: string | ArrayBuffer;
             const mimeType = this.util.getMimeTypeFromExtension(relativePath);
-            // Heuristic to determine if content is text-based or binary
             if (mimeType.startsWith('text/') ||
               ['application/xml', 'application/json', 'application/javascript', 'image/svg+xml'].includes(mimeType) ||
               /\.(html|htm|css|js|xml|qti|txt|md)$/i.test(relativePath)) {
               data = await zipEntry.async('string');
-            } else if (mimeType.startsWith('image/')) { // Convert images to base64 data URIs
+            } else if (mimeType.startsWith('image/')) {
               const base64Data = await zipEntry.async('base64');
               data = `data:${mimeType};base64,${base64Data}`;
-            } else { // Treat others as binary
+            } else {
               data = await zipEntry.async('arraybuffer');
             }
             return {name: relativePath, data: data, mimeType: mimeType};
@@ -194,20 +189,16 @@ export class FileUploadComponent {
       this.loadingMessage = 'Converting course structure...';
       this.changeDetectorRef.markForCheck();
 
-      // ConverterService.convertImscc emits ProcessedCourseWork items
       this.converter.convertImscc(imsccFilesForConverter)
         .pipe(
           finalize(() => {
             console.log('[Orchestrator] IMSCC conversion stream finalized.');
-            if (!this.isProcessing && !this.errorMessage) { // Check if an error didn't already stop processing
+            if (!this.isProcessing && !this.errorMessage) {
               this.successMessage = `Conversion complete. Found ${accumulatedAssignments.length} items. Ready for submission.`;
-            } else if (!this.errorMessage && this.isProcessing) { // Still processing, but conversion itself is done
-              // This might occur if `isProcessing` is managed by a broader scope, but typically finalize means this part is done.
-              // If an error happened in `subscribe.error`, `isProcessing` should be false.
             }
-            this.isProcessing = false; // Ensure processing is marked false if not already by an error.
+            this.isProcessing = false;
             this.loadingMessage = '';
-            this.assignments = [...accumulatedAssignments]; // Store all converted assignments
+            this.assignments = [...accumulatedAssignments];
             console.log('[Orchestrator] Final assignments count after conversion:', this.assignments.length);
             this.changeDetectorRef.markForCheck();
           })
@@ -219,7 +210,7 @@ export class FileUploadComponent {
           error: (error) => {
             console.error('[Orchestrator] Error during IMSCC conversion stream:', error);
             this.errorMessage = `Conversion Error: ${error?.message || String(error)}`;
-            this.isProcessing = false; // Stop processing on error
+            this.isProcessing = false;
             this.loadingMessage = '';
             this.changeDetectorRef.markForCheck();
           }
@@ -235,7 +226,6 @@ export class FileUploadComponent {
     }
   }
 
-  // Main orchestration method for processing selected assignments
   process(selectedContent: SubmissionData): void {
     if (this.isProcessing) {
       console.warn("[Orchestrator] Processing already in progress.");
@@ -252,19 +242,23 @@ export class FileUploadComponent {
     }
 
     console.log('[Orchestrator] Starting process with selected content:', selectedContent);
-    const token = this.auth.getGoogleAccessToken();
-    if (!token) {
-      this.errorMessage = "Processing aborted: No Google access token. Please log in.";
+
+    // Initial token check: Ensure user is authenticated before starting the workflow.
+    // The actual tokens for API calls will be fetched by individual services just-in-time.
+    const initialTokenCheck = this.auth.getGoogleAccessToken();
+    if (!initialTokenCheck) {
+      this.errorMessage = "Processing aborted: User not authenticated. Please log in.";
       console.error(this.errorMessage);
+      this.isProcessing = false; // Ensure isProcessing is reset
+      this.loadingMessage = '';
+      this.changeDetectorRef.markForCheck();
       return;
     }
 
-    // Prepare assignments for the current processing run by filtering selected items
-    // and clearing any pre-existing processing errors from previous runs.
     const assignmentsToProcessIds = new Set(selectedContent.assignmentIds);
     const assignmentsReadyForDriveProcessing = this.assignments
       .filter(assignment => assignment.associatedWithDeveloper?.id && assignmentsToProcessIds.has(assignment.associatedWithDeveloper.id))
-      .map(assignment => ({...assignment, processingError: undefined})); // Clear previous errors for this run
+      .map(assignment => ({...assignment, processingError: undefined}));
 
     if (assignmentsReadyForDriveProcessing.length === 0) {
       this.errorMessage = "No selected assignments found to process.";
@@ -272,10 +266,8 @@ export class FileUploadComponent {
       return;
     }
 
-    // Update the main `this.assignments` list to reflect cleared errors for UI consistency.
     this.assignments = this.assignments.map(a => {
       if (a.associatedWithDeveloper?.id && assignmentsToProcessIds.has(a.associatedWithDeveloper.id)) {
-        // Find the version with the cleared error, or fallback to original 'a' if somehow not found (should not happen)
         return assignmentsReadyForDriveProcessing.find(arp => a.associatedWithDeveloper && arp.associatedWithDeveloper?.id === a.associatedWithDeveloper.id) || a;
       }
       return a;
@@ -295,45 +287,33 @@ export class FileUploadComponent {
       name: uf.name, data: uf.data, mimeType: uf.mimeType
     }));
 
-    // Stage 1: Process content (Drive uploads, QTI conversion, HTML-to-Docs, link fixing)
-    this.processAssignmentsAndCreateContent(courseName, assignmentsReadyForDriveProcessing, token, allPackageFilesForServices).pipe(
+    // Stage 1: Process content. Token is no longer passed here.
+    this.processAssignmentsAndCreateContent(courseName, assignmentsReadyForDriveProcessing, allPackageFilesForServices).pipe(
       tap(driveProcessingResults => {
         console.log('[Orchestrator] Content preparation stage (Drive, QTI, HTML) completed.');
-        // Update the main assignments list with results from this stage (errors, final descriptions).
-        // This is crucial for preparing items for ClassroomService.
         this.assignments = this.assignments.map(assignment => {
           const result = driveProcessingResults.find(r => r.itemId === assignment.associatedWithDeveloper?.id);
-          if (result) { // If a result exists for this assignment
+          if (result) {
             if (result.error) {
               console.warn(`[Orchestrator] Item "${assignment.title}" (ID: ${result.itemId}) failed content prep: ${result.error.message}`);
-              return {
-                ...assignment,
-                processingError: { // Set error from this stage
-                  message: result.error.message || 'Content preparation failed.',
-                  stage: result.error.stage || 'Content Preparation',
-                  details: result.error.details
-                }
-              };
+              return {...assignment, processingError: {...result.error}};
             }
-            // If successful, update with final descriptions needed by ClassroomService
             if (result.finalHtmlDescription !== undefined && result.finalPlainTextDescription !== undefined) {
               return {
                 ...assignment,
                 descriptionForDisplay: result.finalHtmlDescription,
-                descriptionForClassroom: result.finalPlainTextDescription, // Essential for ClassroomService
+                descriptionForClassroom: result.finalPlainTextDescription,
                 richtext: !!result.finalHtmlDescription,
-                processingError: undefined // Explicitly clear if this stage was successful
+                processingError: undefined
               };
             }
           }
-          return assignment; // Return unchanged if no result found for it (should only be for non-processed items)
+          return assignment;
         });
         this.changeDetectorRef.markForCheck();
         this.loadingMessage = 'Preparing items for Classroom submission...';
       }),
       switchMap(driveProcessingResults => {
-        // Filter items that are selected AND have no processingError from the content preparation stage.
-        // These `itemsForClassroom` now have their final `descriptionForClassroom`.
         const itemsForClassroom = this.assignments.filter(assignment =>
           assignmentsToProcessIds.has(assignment.associatedWithDeveloper?.id || '') && !assignment.processingError
         );
@@ -346,44 +326,35 @@ export class FileUploadComponent {
             "No items available for Classroom submission.";
           this.errorMessage = message;
           console.warn(`[Orchestrator] ${message}`);
-          // Return an observable that emits a "skipped" status
           return of({type: 'skipped' as const, reason: message, data: [...this.assignments]});
         }
 
-        // Add materials (Drive files, forms) to the ProcessedCourseWork items.
-        // This is the final step before calling ClassroomService.
         const updatedAssignmentsForClassroom = this.addContentAsMaterials(driveProcessingResults, itemsForClassroom);
         console.log(`[Orchestrator] Assignments fully prepared for ClassroomService: ${updatedAssignmentsForClassroom.length} items.`);
-        if (updatedAssignmentsForClassroom.length > 0) {
+        if (updatedAssignmentsForClassroom.length > 0 && updatedAssignmentsForClassroom[0]) {
           console.log('[Orchestrator] Example of first assignment payload for ClassroomService (materials & description):',
-            JSON.stringify(updatedAssignmentsForClassroom[0]?.materials, null, 2),
-            JSON.stringify(updatedAssignmentsForClassroom[0]?.descriptionForClassroom, null, 2));
+            JSON.stringify(updatedAssignmentsForClassroom[0].materials, null, 2),
+            JSON.stringify(updatedAssignmentsForClassroom[0].descriptionForClassroom, null, 2));
         }
 
         this.loadingMessage = `Submitting ${updatedAssignmentsForClassroom.length} assignment(s) to ${selectedContent.classroomIds.length} classroom(s)... This may take some time.`;
         this.changeDetectorRef.markForCheck();
 
-        // Stage 2: Call the batch-enabled ClassroomService.
-        // It will handle batching requests and individual item retries internally.
-        return this.classroom.assignContentToClassrooms(token, selectedContent.classroomIds, updatedAssignmentsForClassroom).pipe(
+        // Stage 2: Call ClassroomService. Token is no longer passed here.
+        return this.classroom.assignContentToClassrooms(selectedContent.classroomIds, updatedAssignmentsForClassroom).pipe(
           map(classroomServiceResults => {
             console.log('[Orchestrator] Received final results from ClassroomService.assignContentToClassrooms.');
-            // Update the main assignments list with the final status from ClassroomService.
-            // Each item in classroomServiceResults is a ProcessedCourseWork with its final Classroom status.
             this.assignments = this.assignments.map(assignment => {
               const finalResult = classroomServiceResults.find(cr => cr.associatedWithDeveloper?.id === assignment.associatedWithDeveloper?.id);
-              return finalResult ? finalResult : assignment; // Replace with the version from ClassroomService
+              return finalResult ? finalResult : assignment;
             });
             return {type: 'success' as const, response: classroomServiceResults, data: [...this.assignments]};
           }),
-          catchError(classroomPipelineError => { // Catch errors from the assignContentToClassrooms observable itself
+          catchError(classroomPipelineError => {
             const message = classroomPipelineError?.message || 'Unknown error during Classroom submission pipeline.';
             console.error(`[Orchestrator] Error from ClassroomService.assignContentToClassrooms pipeline: ${message}`, classroomPipelineError);
-            // Mark all items that were ATTEMPTED for Classroom submission as failed if an overall pipeline error occurs.
             this.assignments = this.assignments.map(a => {
-              // Check if this assignment 'a' was part of the batch sent to ClassroomService
               if (updatedAssignmentsForClassroom.some(itemSent => itemSent.associatedWithDeveloper?.id === a.associatedWithDeveloper?.id)) {
-                // Only set error if not already set by a more specific error from batch response
                 if (!a.processingError) {
                   a.processingError = {
                     message: `Classroom Submission Pipeline Error: ${message}`,
@@ -398,12 +369,11 @@ export class FileUploadComponent {
           })
         );
       }),
-      catchError((pipelineError: any) => { // Catch errors from the content preparation stage (tap/switchMap)
+      catchError((pipelineError: any) => {
         const source = pipelineError?.source || 'Content Preparation Pipeline';
         const message = pipelineError?.error?.message || pipelineError?.message || 'An unknown error in content preparation.';
         console.error(`[Orchestrator] Error in main processing pipeline (source: ${source}): ${message}`, pipelineError);
         this.errorMessage = `Error during ${source}: ${message}`;
-        // Ensure this.assignments reflects any partial updates or errors from pipelineError.data if available
         this.assignments = pipelineError.data && Array.isArray(pipelineError.data) ? [...pipelineError.data] : [...this.assignments];
         return of({type: 'error' as const, source: source, error: new Error(message), data: [...this.assignments]});
       }),
@@ -416,10 +386,10 @@ export class FileUploadComponent {
     ).subscribe({
       next: (finalResult) => {
         console.log('[Orchestrator] Final result type of processing pipeline:', finalResult.type);
-        this.assignments = [...finalResult.data]; // Ensure UI reflects the absolute final state
+        this.assignments = [...finalResult.data];
 
         if (finalResult.type === 'success') {
-          const itemsProcessedByClassroom = finalResult.response; // Array of ProcessedCourseWork from ClassroomService
+          const itemsProcessedByClassroom = finalResult.response;
           const successfulSubmissions = itemsProcessedByClassroom.filter(r => !r.processingError).length;
           const failedSubmissions = itemsProcessedByClassroom.filter(r => r.processingError).length;
 
@@ -427,26 +397,26 @@ export class FileUploadComponent {
             this.errorMessage = `Submission to Classroom completed with ${failedSubmissions} item(s) failing. Check item details.`;
             if (successfulSubmissions > 0) {
               this.successMessage = `Successfully submitted ${successfulSubmissions} item(s) to classroom(s).`;
-            } else { // No successes, only failures from classroom stage
+            } else {
               this.successMessage = null;
             }
           } else if (successfulSubmissions > 0) {
             this.successMessage = `Successfully submitted ${successfulSubmissions} item(s) to classroom(s).`;
             this.errorMessage = null;
-          } else { // No items were successfully submitted by ClassroomService (e.g. all filtered before call or all failed)
+          } else {
             this.errorMessage = "No items were successfully submitted to Classroom. Check selection or previous errors.";
             this.successMessage = null;
           }
         } else if (finalResult.type === 'skipped') {
           this.errorMessage = `Processing skipped: ${finalResult.reason}`;
           this.successMessage = null;
-        } else if (finalResult.type === 'error') { // Error from content prep stage or Classroom pipeline's catchError
+        } else if (finalResult.type === 'error') {
           this.errorMessage = `Processing Error (${finalResult.source || 'Unknown Stage'}): ${finalResult.error.message}`;
           this.successMessage = null;
         }
         this.changeDetectorRef.markForCheck();
       },
-      error: (err) => { // Catch unexpected errors from the overall subscription if something slips through
+      error: (err) => {
         const errMsg = err?.error?.message || err?.message || err?.toString() || 'An unexpected error occurred.';
         console.error('[Orchestrator] Critical uncaught error in subscription to process pipeline:', errMsg, err);
         this.errorMessage = `An unexpected critical error occurred: ${errMsg}`;
@@ -458,13 +428,10 @@ export class FileUploadComponent {
     });
   }
 
-
-  // This method handles the pre-Classroom processing: Drive uploads, QTI to Forms, HTML to Docs, link fixing.
-  // It returns ProcessingResult[] which includes final descriptions and any errors from this stage.
   processAssignmentsAndCreateContent(
     courseName: string,
-    itemsToProcess: ProcessedCourseWork[], // Items selected for processing, with errors cleared for this run
-    accessToken: string,
+    itemsToProcess: ProcessedCourseWork[],
+    // accessToken: string, // Removed accessToken parameter
     allPackageImsccFiles: ImsccFile[]
   ): Observable<ProcessingResult[]> {
     console.log(`[Orchestrator] processAssignmentsAndCreateContent: Starting content preparation for ${itemsToProcess.length} items.`);
@@ -473,7 +440,6 @@ export class FileUploadComponent {
     }
 
     return from(itemsToProcess).pipe(
-      // Process items sequentially for Drive operations to manage load and for clearer per-item loading messages.
       concatMap((item, index) => {
         const itemLogPrefix = `ContentPrep Item ${index + 1}/${itemsToProcess.length} ("${item.title?.substring(0, 30)}..."):`;
         this.loadingMessage = itemLogPrefix;
@@ -481,25 +447,14 @@ export class FileUploadComponent {
         console.log(`${itemLogPrefix} Beginning content preparation.`);
 
         const assignmentName = item.title || 'Untitled Assignment';
-        // Use item's specific topic name for Drive folder organization.
-        // ClassroomService will use item.associatedWithDeveloper.topic for the actual Classroom topic.
         const driveTopicFolderName = item.associatedWithDeveloper?.topic || 'General';
-        let htmlDescriptionForProcessing = item.descriptionForDisplay; // Initial HTML for this item
+        let htmlDescriptionForProcessing = item.descriptionForDisplay;
         const itemId = item.associatedWithDeveloper?.id;
 
-        // Prepare file data for upload service, ensuring ArrayBuffer for binary files.
         const filesToUploadForDriveService = (item.localFilesToUpload || []).map(ftu => {
           const originalUnzippedFile = this.unzippedFiles.find(uzf => uzf.name === ftu.file.name);
           if (originalUnzippedFile && originalUnzippedFile.data instanceof ArrayBuffer) {
-            // If original data is ArrayBuffer, use it directly.
             return {...ftu, file: {...ftu.file, data: originalUnzippedFile.data}};
-          } else if (typeof ftu.file.data === 'string' && ftu.file.data.startsWith('data:') && ftu.file.mimeType.startsWith('image/')) {
-            // If it's a data URI (e.g., from image unzipping), FileUploadService might need to handle it
-            // or it should be converted to Blob/ArrayBuffer here if FileUploadService expects that.
-            // For now, pass as is; FileUploadService would need to be robust.
-            console.warn(`${itemLogPrefix} File ${ftu.file.name} is a data URI. Ensure FileUploadService can handle this.`);
-          } else if (typeof ftu.file.data === 'string' && !ftu.file.data.startsWith('data:')) {
-            console.error(`${itemLogPrefix} File ${ftu.file.name} has raw string data (not data URI). This is unexpected for binary uploads.`);
           }
           return ftu;
         });
@@ -515,16 +470,11 @@ export class FileUploadComponent {
           } as ProcessingResult);
         }
 
-        console.log(`${itemLogPrefix} ItemID: ${itemId}, DriveTopic: "${driveTopicFolderName}", FilesToUpload: ${filesToUploadForDriveService.length}, HasQTI: ${!!qtiFileForService}, ShouldCreateDoc: ${shouldCreateDoc}`);
-
-        // Step 1: Ensure Drive folder structure
-        return this.drive.ensureAssignmentFolderStructure(courseName, driveTopicFolderName, assignmentName, itemId, accessToken).pipe(
+        // Services will fetch their own tokens. No need to pass 'accessToken' anymore.
+        return this.drive.ensureAssignmentFolderStructure(courseName, driveTopicFolderName, assignmentName, itemId).pipe(
           switchMap(assignmentFolderId => {
-            console.log(`${itemLogPrefix} Drive Folder ready: ${assignmentFolderId}`);
-
-            // Step 2: Upload local files, shareReplay to ensure it executes once per item even if subscribed multiple times.
             const uploadedFiles$: Observable<DriveFile[]> = (filesToUploadForDriveService.length > 0 ?
-              this.files.uploadLocalFiles(filesToUploadForDriveService, accessToken, assignmentFolderId) :
+              this.files.uploadLocalFiles(filesToUploadForDriveService, assignmentFolderId) : // No accessToken
               of([])
             ).pipe(
               tap(uploaded => console.log(`${itemLogPrefix} ${uploaded.length} local files uploaded.`)),
@@ -535,66 +485,58 @@ export class FileUploadComponent {
               shareReplay(1)
             );
 
-            // Step 3: Create primary content (QTI Form or HTML Doc) or process HTML for links
-            let primaryContentCreation$: Observable<DriveFile | Material | null>; // Material for Form, DriveFile for Doc
-            let currentHtmlContent = htmlDescriptionForProcessing; // Work with a mutable copy for this item
+            let primaryContentCreation$: Observable<DriveFile | Material | null>;
+            let currentHtmlContent = htmlDescriptionForProcessing;
 
-            if (qtiFileForService) { // QTI takes precedence
-              console.log(`${itemLogPrefix} Processing QTI to Form.`);
-              primaryContentCreation$ = this.qti.createFormFromQti(qtiFileForService, allPackageImsccFiles, assignmentName, accessToken, itemId, assignmentFolderId)
+            if (qtiFileForService) {
+              primaryContentCreation$ = this.qti.createFormFromQti(qtiFileForService, allPackageImsccFiles, assignmentName, itemId, assignmentFolderId) // No accessToken
                 .pipe(
                   tap(form => console.log(`${itemLogPrefix} QTI Form created/found.`)),
                   catchError(qtiErr => throwError(() => ({message: `QTI to Form failed: ${qtiErr.message}`, stage: 'QTI Processing', details: qtiErr, itemId})))
                 );
-            } else if (shouldCreateDoc) { // HTML to Doc if applicable
-              console.log(`${itemLogPrefix} Processing HTML to Doc.`);
-              primaryContentCreation$ = uploadedFiles$.pipe( // Ensure uploads complete before link replacement & doc creation
+            } else if (shouldCreateDoc) {
+              primaryContentCreation$ = uploadedFiles$.pipe(
                 switchMap(uploadedDriveFiles => {
                   if (currentHtmlContent) {
                     currentHtmlContent = this.replaceLocalLinksInHtml(currentHtmlContent, uploadedDriveFiles, filesToUploadForDriveService, itemLogPrefix);
                   }
-                  return this.docs.createDocFromHtml(currentHtmlContent || '', assignmentName, accessToken, itemId, assignmentFolderId);
+                  return this.docs.createDocFromHtml(currentHtmlContent || '', assignmentName, itemId, assignmentFolderId); // No accessToken
                 }),
                 tap(doc => console.log(`${itemLogPrefix} HTML Doc created/found.`)),
                 catchError(docErr => throwError(() => ({message: `HTML to Doc failed: ${docErr.message}`, stage: 'HTML to Doc', details: docErr, itemId})))
               );
-            } else { // No QTI, no Doc creation; if HTML exists, still process it for link replacement
-              console.log(`${itemLogPrefix} No QTI/Doc creation. Processing HTML for links if present.`);
+            } else {
               primaryContentCreation$ = uploadedFiles$.pipe(
                 map(uploadedDriveFiles => {
                   if (currentHtmlContent) {
                     currentHtmlContent = this.replaceLocalLinksInHtml(currentHtmlContent, uploadedDriveFiles, filesToUploadForDriveService, itemLogPrefix);
                   }
-                  return null; // Signifies no primary Doc/Form was created, but HTML (if any) was processed
+                  return null;
                 }),
                 catchError(linkErr => throwError(() => ({message: `HTML link processing failed: ${linkErr.message}`, stage: 'HTML Link Processing', details: linkErr, itemId})))
               );
             }
 
-            // Step 4: Combine results of uploads and primary content creation
             return forkJoin({
               uploadedFilesResult: uploadedFiles$,
               createdContentResult: primaryContentCreation$
             }).pipe(
               map(({uploadedFilesResult, createdContentResult}) => {
-                // Finalize descriptions for this item
-                const finalHtmlDesc = currentHtmlContent || ''; // currentHtmlContent has link replacements
+                const finalHtmlDesc = currentHtmlContent || '';
                 const finalPlainTextDesc = this.generatePlainText(finalHtmlDesc);
-
-                console.log(`${itemLogPrefix} Content preparation successful. Final plain text description length: ${finalPlainTextDesc.length}`);
                 return {
                   itemId, assignmentName, topicName: driveTopicFolderName, assignmentFolderId,
-                  createdDoc: (createdContentResult && 'mimeType' in createdContentResult) ? createdContentResult as DriveFile : undefined,
+                  createdDoc: (createdContentResult && 'mimeType' in createdContentResult && (createdContentResult as DriveFile).mimeType !== 'application/vnd.google-apps.form') ? createdContentResult as DriveFile : undefined,
                   createdForm: (createdContentResult && 'form' in createdContentResult) ? createdContentResult as Material : undefined,
                   uploadedFiles: uploadedFilesResult,
-                  error: null, // Success for this item's content prep
+                  error: null,
                   finalHtmlDescription: finalHtmlDesc,
                   finalPlainTextDescription: finalPlainTextDesc
                 } as ProcessingResult;
               })
             );
           }),
-          catchError((errorFromStage: any) => { // Catch errors from ensureAssignmentFolderStructure or any sub-stage
+          catchError((errorFromStage: any) => {
             const stage = errorFromStage?.stage || 'Content Preparation Sub-Stage';
             const message = errorFromStage?.message || 'Unknown error during content prep sub-stage.';
             console.error(`${itemLogPrefix} Error during content prep for item. Stage: ${stage}, Msg: ${message}`, errorFromStage.details);
@@ -602,17 +544,16 @@ export class FileUploadComponent {
               itemId, assignmentName, topicName: driveTopicFolderName,
               assignmentFolderId: 'ERROR_CONTENT_PREP',
               error: {message, stage, details: errorFromStage.details || errorFromStage},
-              finalHtmlDescription: htmlDescriptionForProcessing, // Fallback to original HTML on error
-              finalPlainTextDescription: this.generatePlainText(htmlDescriptionForProcessing) // Fallback plain text
+              finalHtmlDescription: htmlDescriptionForProcessing,
+              finalPlainTextDescription: this.generatePlainText(htmlDescriptionForProcessing)
             } as ProcessingResult);
           })
         );
       }),
-      toArray() // Collect results for all items
+      toArray()
     );
   }
 
-  // Helper to replace local links in HTML content with Drive links
   private replaceLocalLinksInHtml(
     htmlContent: string,
     uploadedDriveFiles: DriveFile[],
@@ -620,19 +561,15 @@ export class FileUploadComponent {
     itemLogPrefix: string
   ): string {
     if (!htmlContent) return '';
-    // This check prevents errors if DOMParser is not available in certain test environments,
-    // though it should be available in a browser context.
     if (typeof DOMParser === 'undefined') {
       console.warn(`${itemLogPrefix} DOMParser not available. Skipping HTML link replacement.`);
       return htmlContent;
     }
-    console.log(`${itemLogPrefix} Attempting to replace local links in HTML (length: ${htmlContent.length}).`);
     try {
       const parser = new DOMParser();
       const htmlDoc = parser.parseFromString(htmlContent, 'text/html');
-      const body = htmlDoc.body || htmlDoc.documentElement; // Fallback to documentElement if body is null
+      const body = htmlDoc.body || htmlDoc.documentElement;
 
-      // Process <a> tags with data-imscc-original-path
       body.querySelectorAll('a[data-imscc-original-path]').forEach((anchor: Element) => {
         const htmlAnchor = anchor as HTMLAnchorElement;
         const originalPath = htmlAnchor.getAttribute('data-imscc-original-path');
@@ -643,13 +580,10 @@ export class FileUploadComponent {
           const normalizedOriginalPath = normalizeSpacesString(this.util.tryDecodeURIComponent(originalPath).toLowerCase());
 
           for (const ftu of filesOriginallyQueuedForUpload) {
-            // Match against the original zip path (ftu.file.name)
             const decodedFullZipPath = this.util.tryDecodeURIComponent(ftu.file.name);
             const normalizedFtuName = normalizeSpacesString(decodedFullZipPath.toLowerCase());
-
-            // Try to match if the originalPath is a suffix of the full zip path or vice-versa (for flexibility with relative paths)
             if (normalizedFtuName.endsWith(normalizedOriginalPath) || normalizedOriginalPath.endsWith(normalizedFtuName)) {
-              matchedDriveFile = uploadedDriveFiles.find(udf => udf.name === ftu.targetFileName); // Match uploaded file by its target name
+              matchedDriveFile = uploadedDriveFiles.find(udf => udf.name === ftu.targetFileName);
               if (matchedDriveFile) break;
             }
           }
@@ -657,23 +591,20 @@ export class FileUploadComponent {
           if (matchedDriveFile?.webViewLink) {
             htmlAnchor.href = matchedDriveFile.webViewLink;
             htmlAnchor.target = '_blank';
-            htmlAnchor.rel = 'noopener noreferrer'; // Security best practice for _blank links
-            htmlAnchor.textContent = displayTitleAttr; // Use the decoded display title
+            htmlAnchor.rel = 'noopener noreferrer';
+            htmlAnchor.textContent = displayTitleAttr;
             console.log(`${itemLogPrefix} Updated anchor for "${originalPath}" to Drive link: ${matchedDriveFile.webViewLink} with text "${displayTitleAttr}".`);
           } else {
             console.warn(`${itemLogPrefix} No Drive file found for local link anchor: "${originalPath}". Original text: "${displayTitleAttr}"`);
             htmlAnchor.textContent = `[Broken Link: ${displayTitleAttr}]`;
-            htmlAnchor.removeAttribute('href'); // Remove href if broken
+            htmlAnchor.removeAttribute('href');
           }
-          // Clean up helper attributes
           htmlAnchor.removeAttribute('data-imscc-original-path');
           htmlAnchor.removeAttribute('data-imscc-media-type');
           htmlAnchor.removeAttribute('data-imscc-display-title');
         }
       });
 
-      // Process custom <span> placeholders (if any were generated by converter for non-<a> links)
-      // Example: <span class="imscc-local-file-placeholder" data-original-path="path/to/file.pdf">File.pdf</span>
       body.querySelectorAll('span.imscc-local-file-placeholder[data-original-path]').forEach((span: Element) => {
         const htmlSpan = span as HTMLSpanElement;
         const originalPath = htmlSpan.getAttribute('data-original-path');
@@ -697,58 +628,52 @@ export class FileUploadComponent {
             newAnchor.target = '_blank';
             newAnchor.rel = 'noopener noreferrer';
             newAnchor.textContent = displayDefaultText;
-            span.parentNode?.replaceChild(newAnchor, span); // Replace span with new anchor
+            span.parentNode?.replaceChild(newAnchor, span);
             console.log(`${itemLogPrefix} Replaced SPAN placeholder for "${originalPath}" with Drive link.`);
           } else {
             console.warn(`${itemLogPrefix} No Drive file found for SPAN placeholder: "${originalPath}".`);
             htmlSpan.textContent = `[Broken Content: ${displayDefaultText}]`;
-            htmlSpan.style.color = "red"; // Indicate broken
+            htmlSpan.style.color = "red";
           }
         }
       });
-      // Consider other placeholder patterns if your converter service creates them.
-
       return htmlDoc.body.innerHTML;
     } catch (e) {
       console.error(`${itemLogPrefix} Error during HTML DOM manipulation for link replacement:`, e);
-      return htmlContent; // Return original HTML on error
+      return htmlContent;
     }
   }
 
-  // Generates plain text from HTML, truncating if necessary.
   private generatePlainText(html: string | undefined | null): string {
     if (!html) return '';
-    if (typeof document === 'undefined') { // Guard for non-browser environments (e.g. server-side tests)
+    if (typeof document === 'undefined') {
       console.warn("`document` is not available. Cannot generate plain text from HTML.");
       return '';
     }
     try {
       const tempDiv = document.createElement('div');
       tempDiv.innerHTML = html;
-      // Extract text content, then normalize whitespace (replace multiple spaces/newlines with a single space)
       let text = (tempDiv.textContent || tempDiv.innerText || '').replace(/\s\s+/g, ' ').trim();
-      const maxLen = 30000; // Google Classroom description length limit
+      const maxLen = 30000;
       if (text.length > maxLen) {
-        text = text.substring(0, maxLen - 3) + "..."; // Truncate and add ellipsis
+        text = text.substring(0, maxLen - 3) + "...";
         console.warn('[Orchestrator] Plain text description was truncated to fit Classroom API limits.');
       }
       return text;
     } catch (e) {
       console.error("[Orchestrator] Error generating plain text from HTML:", e);
-      return ""; // Fallback to empty string on error
+      return "";
     }
   }
 
-  // Helper to generate a unique key for a Material object for deduplication.
   private getMaterialKey(material: Material): string | null {
     if (material.driveFile?.driveFile?.id) return `drive-${material.driveFile.driveFile.id}`;
     if (material.youtubeVideo?.id) return `youtube-${material.youtubeVideo.id}`;
-    if (material.link?.url) return `link-${this.util.tryDecodeURIComponent(material.link.url).toLowerCase()}`; // Normalize URL for key
-    if (material.form?.formUrl) return `form-${this.util.tryDecodeURIComponent(material.form.formUrl).toLowerCase()}`; // Normalize URL for key
-    return null; // Should not happen for valid, known material types
+    if (material.link?.url) return `link-${this.util.tryDecodeURIComponent(material.link.url).toLowerCase()}`;
+    if (material.form?.formUrl) return `form-${this.util.tryDecodeURIComponent(material.form.formUrl).toLowerCase()}`;
+    return null;
   }
 
-  // Deduplicates materials based on their unique key.
   private deduplicateMaterials(materials: Material[]): Material[] {
     if (!materials || materials.length === 0) return [];
     const seenKeys = new Set<string>();
@@ -758,85 +683,45 @@ export class FileUploadComponent {
       if (key !== null && !seenKeys.has(key)) {
         seenKeys.add(key);
         uniqueMaterials.push(material);
-      } else if (key === null) { // If material type is unknown or key generation fails
+      } else if (key === null) {
         console.warn('[Orchestrator] deduplicateMaterials: Encountered material with no identifiable key. Including as is.', material);
-        uniqueMaterials.push(material); // Include it anyway, but log
-      } else {
-        // This material (based on its key) has already been added.
-        console.log(`[Orchestrator] deduplicateMaterials: Duplicate material skipped (Key: ${key})`);
+        uniqueMaterials.push(material);
       }
     }
     return uniqueMaterials;
   }
 
-  // This method is called AFTER the Drive/Conversion stage (`processAssignmentsAndCreateContent`).
-  // It takes items that are ready for Classroom and populates their `materials` array
-  // based on the files uploaded/created during the Drive/Conversion stage.
-  // The `itemsReadyForClassroom` should already have their final `descriptionForClassroom` set.
   addContentAsMaterials(
-    driveProcessingResults: ProcessingResult[], // Results from the Drive/Conversion stage for ALL selected items
-    itemsReadyForClassroom: ProcessedCourseWork[]  // Subset of items: selected, passed Drive/Conversion, and have final descriptions
+    driveProcessingResults: ProcessingResult[],
+    itemsReadyForClassroom: ProcessedCourseWork[]
   ): ProcessedCourseWork[] {
-    console.log(`[Orchestrator] addContentAsMaterials: Finalizing materials for ${itemsReadyForClassroom.length} items.`);
-
     return itemsReadyForClassroom.map(item => {
-      // Create a new object for modification to avoid side effects on the input array elements if they are directly from state.
-      const updatedItem = {...item, materials: [...(item.materials || [])]}; // Start with any pre-existing materials
-
+      const updatedItem = {...item, materials: [...(item.materials || [])]};
       const result = driveProcessingResults.find(r => r.itemId === updatedItem.associatedWithDeveloper?.id);
-      const itemLogPrefix = `MaterialFinalization Item "${updatedItem.title}" (ID: ${updatedItem.associatedWithDeveloper?.id}):`;
 
-      if (result && !result.error) { // Only add materials if the corresponding Drive/Conversion stage was successful
-        const initialMaterialCount = updatedItem.materials.length;
-
-        // Add created Google Doc as a material
+      if (result && !result.error) {
         if (result.createdDoc?.id && result.createdDoc?.name) {
           updatedItem.materials.push({
-            driveFile: {driveFile: {id: result.createdDoc.id, title: result.createdDoc.name}, shareMode: 'STUDENT_COPY'} // Default to STUDENT_COPY for primary docs
+            driveFile: {driveFile: {id: result.createdDoc.id, title: result.createdDoc.name}, shareMode: 'STUDENT_COPY'}
           });
         }
-        // Add created Google Form link as a material
         if (result.createdForm?.form?.formUrl) {
           updatedItem.materials.push({
             link: {url: result.createdForm.form.formUrl, title: result.createdForm.form.title || result.assignmentName}
           });
         }
-        // Add other uploaded files as materials
         (result.uploadedFiles || []).forEach(uploadedFile => {
           if (uploadedFile?.id && uploadedFile?.name) {
-            // Avoid re-adding the primary createdDoc if it somehow also appears in general uploadedFiles
             if (!(result.createdDoc?.id === uploadedFile.id)) {
               updatedItem.materials.push({
-                driveFile: {driveFile: {id: uploadedFile.id, title: uploadedFile.name}, shareMode: 'VIEW'} // Default to VIEW for supplementary files
+                driveFile: {driveFile: {id: uploadedFile.id, title: uploadedFile.name}, shareMode: 'VIEW'}
               });
             }
           }
         });
-
-        // Deduplicate all materials (existing + newly added) to ensure clean list for ClassroomService
         updatedItem.materials = this.deduplicateMaterials(updatedItem.materials);
-        console.log(`${itemLogPrefix} Initial materials: ${initialMaterialCount}, Final materials after additions & deduplication: ${updatedItem.materials.length}`);
-
-        // Descriptions (descriptionForDisplay, descriptionForClassroom) are assumed to be ALREADY FINALIZED
-        // on the `item` object when it's passed into this function (as part of `itemsReadyForClassroom`).
-        // They were set using `finalHtmlDescription` and `finalPlainTextDescription` from `driveProcessingResults`
-        // when `this.assignments` was updated in the main `process` method.
-        // Therefore, no need to update descriptions here again.
-        // The fallback logic for descriptions that was here previously is removed,
-        // relying on `processAssignmentsAndCreateContent` to be the source of truth for final descriptions.
-        if (!updatedItem.descriptionForClassroom && updatedItem.materials.length > 0) {
-          console.warn(`${itemLogPrefix} Item has materials but descriptionForClassroom is empty. Consider if a default description is needed if not set by content prep.`);
-        }
-
-
-      } else if (result && result.error) {
-        // This case should ideally be filtered out by the logic that creates `itemsReadyForClassroom`,
-        // but this log is a safeguard.
-        console.warn(`${itemLogPrefix} Skipping material addition; item had an error in Drive/Conversion stage: ${result.error.message}`);
-      } else if (!result) {
-        console.warn(`${itemLogPrefix} No corresponding Drive/Conversion result found. Materials cannot be added from this stage.`);
       }
-      return updatedItem; // Return the item with its finalized materials list
+      return updatedItem;
     });
   }
 }

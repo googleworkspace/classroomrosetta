@@ -26,59 +26,65 @@ import {
   CourseWork,
   ProcessedCourseWork,
   Material,
-  CourseWorkMaterial
+  CourseWorkMaterial,
 } from '../../interfaces/classroom-interface';
-import {UtilitiesService, RetryConfig} from '../utilities/utilities.service';
+
+import {
+  UtilitiesService,
+  RetryConfig,
+  BatchOperation,
+  BatchResponseParser
+} from '../utilities/utilities.service'; // Assuming path is correct
+import {AuthService} from '../auth/auth.service'; // Import AuthService
 
 @Injectable({
   providedIn: 'root'
 })
 export class ClassroomService {
 
-  // Base URLs for the Google Classroom API v1
+  // Base API URLs for Google Classroom
   private coursesApiUrl = 'https://classroom.googleapis.com/v1/courses';
   private topicsApiUrl = (courseId: string) => `${this.coursesApiUrl}/${courseId}/topics`;
-  private courseWorkApiUrl = (courseId: string) => `${this.coursesApiUrl}/${courseId}/courseWork`;
-  private courseWorkMaterialsApiUrl = (courseId: string) => `${this.coursesApiUrl}/${courseId}/courseWorkMaterials`;
 
-
+  // Injected services
   private http = inject(HttpClient);
   private utils = inject(UtilitiesService);
-  private pageSize = '50'; // Consider making this configurable or smaller if not all classrooms are needed at once
-  private materialLimit = 20; // Classroom API limit for materials per item
+  private auth = inject(AuthService); // Inject AuthService
 
-  private defaultRetryConfig: RetryConfig = {maxRetries: 3, initialDelayMs: 2000};
+  // Default pagination and material limits
+  private pageSize = '50';
+  private materialLimit = 20;
+
+  // Default configuration for retrying failed HTTP requests
+  private defaultRetryConfig: Required<RetryConfig> = {
+    maxRetries: 5,
+    initialDelayMs: 2000,
+    backoffFactor: 2,
+    retryableStatusCodes: [429, 500, 503, 504]
+  };
 
   constructor() { }
 
-  // --- Get Classrooms ---
   /**
    * Fetches all active classrooms for the authenticated user.
-   * Handles pagination automatically.
-   * @param authToken The OAuth 2.0 token for authentication.
-   * @returns An Observable array of active Classroom objects.
+   * Token is fetched internally.
    */
-  getActiveClassrooms(authToken: string): Observable<Classroom[]> {
-    if (!authToken) {
-      console.error('ClassroomService: Auth token is missing for getActiveClassrooms.');
-      return of([]); // Return empty array or throw error based on desired handling
-    }
+  getActiveClassrooms(): Observable<Classroom[]> {
     const context = 'getActiveClassrooms';
-    console.log(`[ClassroomService] ${context}: Fetching active classrooms.`);
-    // Fetch the first page and then expand to get subsequent pages if nextPageToken exists
-    return this.fetchClassroomPage(authToken, undefined, context).pipe(
+    const authToken = this.auth.getGoogleAccessToken();
+    if (!authToken) {
+      console.error(`[ClassroomService] ${context}: Auth token is missing.`);
+      return throwError(() => new Error('Authentication token is required for getActiveClassrooms.'));
+    }
+
+    return this.fetchClassroomPage(undefined, context, authToken).pipe( // Pass token to first call
       expand(response => {
-        // If there's a nextPageToken, fetch the next page
         if (response.nextPageToken) {
-          console.log(`[ClassroomService] ${context}: Fetching next page of classrooms (Token: ${response.nextPageToken}).`);
-          return this.fetchClassroomPage(authToken, response.nextPageToken, `${context} (paginated)`);
+          return this.fetchClassroomPage(response.nextPageToken, `${context} (paginated)`, authToken);
         }
-        // If no nextPageToken, complete the expand operator
         return EMPTY;
       }),
-      // Map each response to its 'courses' array (or an empty array if undefined)
       map(response => response.courses || []),
-      // Reduce the stream of course arrays into a single array of all courses
       reduce((acc, courses) => acc.concat(courses), [] as Classroom[]),
       tap(allCourses => console.log(`[ClassroomService] ${context}: Successfully fetched ${allCourses.length} active classrooms.`)),
       catchError(err => this.handleError(err, `${context} (Accumulation)`))
@@ -87,471 +93,343 @@ export class ClassroomService {
 
   /**
    * Fetches a single page of classrooms.
-   * @param authToken The OAuth 2.0 token.
-   * @param pageToken Optional token for fetching a specific page.
-   * @param context A string describing the context of the call for logging.
-   * @returns An Observable of ClassroomListResponse.
+   * Expects authToken to be passed, or fetches it if not provided (for internal consistency).
    */
-  private fetchClassroomPage(authToken: string, pageToken?: string, context: string = 'fetchClassroomPage'): Observable<ClassroomListResponse> {
-    const headers = this.createAuthHeaders(authToken);
-    let params = new HttpParams()
-      .set('courseStates', 'ACTIVE') // Filter for active courses
-      .set('pageSize', this.pageSize);
+  private fetchClassroomPage(pageToken?: string, context: string = 'fetchClassroomPage', authToken?: string): Observable<ClassroomListResponse> {
+    const tokenToUse = authToken || this.auth.getGoogleAccessToken();
+    if (!tokenToUse) {
+      const errorMsg = `[ClassroomService] ${context}: Auth token is missing.`;
+      console.error(errorMsg);
+      return throwError(() => new Error(errorMsg));
+    }
+    const headers = this.createAuthHeaders(tokenToUse);
+    let params = new HttpParams().set('courseStates', 'ACTIVE').set('pageSize', this.pageSize);
     if (pageToken) {
       params = params.set('pageToken', pageToken);
     }
     const operationDescription = `${context} (Page Token: ${pageToken ?? 'initial'})`;
-    console.log(`[ClassroomService] ${operationDescription}: Making API call.`);
     const request$ = this.http.get<ClassroomListResponse>(this.coursesApiUrl, {headers, params});
-    // Retry the request using the utility service
     return this.utils.retryRequest(request$, this.defaultRetryConfig, operationDescription).pipe(
       catchError(err => this.handleError(err, operationDescription))
     );
   }
 
   /**
-   * Assigns multiple pieces of content (ProcessedCourseWork) to multiple classrooms.
-   * Handles topic creation/retrieval and material splitting if necessary.
-   * @param authToken The OAuth 2.0 token.
-   * @param classroomIds Array of classroom IDs to assign content to.
-   * @param assignments Array of ProcessedCourseWork objects to assign.
-   * @returns An Observable array of ProcessedCourseWork, each potentially updated with an error or API response data.
+   * Parser function specific to Google Classroom API responses for batch operations.
+   */
+  private classroomBatchResponseParser: BatchResponseParser<ProcessedCourseWork> = (
+    processedItem, responseJson, statusCode, statusText, operationId
+  ): void => {
+    const itemTitleForLog = processedItem.title ? `"${processedItem.title.substring(0, 20)}..."` : "(No Title)";
+    const itemLogPrefix = `[CS BatchOp ID ${operationId} ${itemTitleForLog} PARSER]:`;
+
+    if (statusCode >= 200 && statusCode < 300) {
+      processedItem.classroomCourseWorkId = responseJson.id;
+      processedItem.classroomLink = responseJson.alternateLink;
+      processedItem.state = responseJson.state || 'DRAFT';
+      processedItem.processingError = undefined;
+      console.log(`${itemLogPrefix} Parsed Success (Status ${statusCode}). ID: ${responseJson.id}, Link: ${responseJson.alternateLink}`);
+    } else {
+      const apiErrorMessage = responseJson.error?.message || statusText || 'Unknown error in sub-response.';
+      console.warn(`${itemLogPrefix} Parsed Failure (Status ${statusCode}). API Error: "${apiErrorMessage}"`);
+      processedItem.processingError = {
+        message: `Batch item failed: ${apiErrorMessage} (Status: ${statusCode})`,
+        stage: processedItem.workType === 'MATERIAL' ? 'Batch Material Creation Error (CS)' : 'Batch CourseWork Creation Error (CS)',
+        details: {statusCode: statusCode, errorBody: responseJson.error || responseJson, opId: operationId}
+      };
+    }
+  };
+
+  /**
+   * Assigns content to multiple classrooms. Token is fetched internally.
    */
   assignContentToClassrooms(
-    authToken: string,
     classroomIds: string[],
     assignments: ProcessedCourseWork[]
   ): Observable<ProcessedCourseWork[]> {
-    console.log(`[ClassroomService] assignContentToClassrooms: Starting assignment process for ${assignments.length} items to ${classroomIds.length} classrooms.`);
+    const serviceCallId = `cs-assign-${Date.now()}`;
+    console.log(`[ClassroomService][${serviceCallId}] assignContentToClassrooms: Starting for ${assignments.length} items to ${classroomIds.length} classrooms.`);
+
+    const authToken = this.auth.getGoogleAccessToken(); // Fetch token for this entire operation
     if (!authToken) {
-      console.error('[ClassroomService] assignContentToClassrooms: Auth token is required.');
-      return throwError(() => new Error('Authentication token is required.'));
+      const errorMsg = `[ClassroomService][${serviceCallId}] Auth token missing. Cannot assign content.`;
+      console.error(errorMsg);
+      // Mark all assignments as failed due to auth token issue
+      const assignmentsWithError = assignments.map(a => ({
+        ...a,
+        processingError: {message: "Authentication token missing for batch operation.", stage: "Pre-flight Auth (CS)"}
+      }));
+      return of(assignmentsWithError); // Return assignments marked with error
     }
+
     if (!classroomIds?.length) {
-      console.warn('[ClassroomService] assignContentToClassrooms: No classroom IDs provided.');
-      // Return assignments with an error message if no classrooms are selected
-      return of(assignments.map(a => ({...a, processingError: {message: "No classroom selected.", stage: "Pre-flight Check"}})));
+      return of(assignments.map(a => ({...a, processingError: {message: "No classroom selected.", stage: "Pre-flight Check (CS)"}})));
     }
     if (!assignments?.length) {
-      console.warn('[ClassroomService] assignContentToClassrooms: No assignments provided.');
       return of([]);
     }
 
-    // Cache for topic ID requests to avoid redundant API calls for the same topic in the same course
     const topicRequestCache = new Map<string, Observable<string | undefined>>();
-    const allOperationsObservables: Observable<ProcessedCourseWork>[] = [];
+    const preparationObservables: Observable<void>[] = [];
+    const allItemsToTrackForBatchResult: ProcessedCourseWork[] = [];
+    const batchOperationsToExecute: BatchOperation<ProcessedCourseWork, CourseWork | CourseWorkMaterial>[] = [];
+    let operationIdCounter = 0;
 
-    // Iterate over each classroom ID
     for (const courseId of classroomIds) {
-      console.log(`[ClassroomService] Processing assignments for Classroom ID: ${courseId}`);
-      // Iterate over each assignment to be processed
       for (const originalAssignment of assignments) {
-        // Clone the assignment to avoid mutating the original object, especially important if retries occur
-        const assignmentForProcessing: ProcessedCourseWork = {...originalAssignment};
-        const itemLogPrefix = `[ClassroomService] Item "${assignmentForProcessing.title}" (ID: ${assignmentForProcessing.associatedWithDeveloper?.id || 'N/A'}) for Course ID ${courseId}:`;
-
-        // Basic validation for the assignment
-        if (!assignmentForProcessing.title || !assignmentForProcessing.workType) {
-          console.warn(`${itemLogPrefix} Skipping assignment due to missing title or workType.`);
-          assignmentForProcessing.processingError = {
-            message: 'Skipped: Missing title or workType.',
-            stage: 'Pre-flight Check (ClassroomService)'
-          };
-          allOperationsObservables.push(of(assignmentForProcessing)); // Add to operations to maintain result structure
-          continue; // Skip to the next assignment
-        }
-        console.log(`${itemLogPrefix} Preparing for Classroom API. Topic: "${assignmentForProcessing.associatedWithDeveloper?.topic || 'None'}"`);
-
-        const topicName = assignmentForProcessing.associatedWithDeveloper?.topic;
-        // Deduplicate materials to prevent API errors or redundant attachments
-        const uniqueMaterials = this.deduplicateMaterials(assignmentForProcessing.materials || []);
-        console.log(`${itemLogPrefix} Deduplicated materials count: ${uniqueMaterials.length}`);
-
-
-        // Create a unique cache key for topic requests per course and topic name
-        const cacheKey = `${courseId}:${topicName?.trim().toLowerCase() || 'undefined_topic_key'}`;
-        let topicId$: Observable<string | undefined> | undefined = topicRequestCache.get(cacheKey);
-
-        // If topic ID observable is not in cache, create it
-        if (!topicId$) {
-          console.log(`${itemLogPrefix} Topic ID for "${topicName || 'None'}" not in cache. Fetching or creating.`);
-          topicId$ = this.getOrCreateTopicId(authToken, courseId, topicName).pipe(
-            tap(resolvedTopicId => console.log(`${itemLogPrefix} Resolved Topic ID for "${topicName || 'None'}": ${resolvedTopicId || 'None'}`)),
-            shareReplay(1), // Cache the result of this observable to share among subscribers
-            catchError(topicError => {
-              console.error(`${itemLogPrefix} CRITICAL error resolving topic "${topicName}". Error: ${topicError.message}`);
-              // Propagate a structured error
-              return throwError(() => ({
-                message: `Failed to resolve/create topic "${topicName || 'None'}": ${topicError.message || topicError}`,
-                stage: 'Topic Management',
-                details: topicError.details || topicError.toString()
-              }));
-            })
-          );
-          topicRequestCache.set(cacheKey, topicId$); // Store the observable in the cache
-        } else {
-          console.log(`${itemLogPrefix} Using cached Topic ID for "${topicName || 'None'}".`);
-        }
-
-        // Function to create an observable for a single classroom item (CourseWork or Material)
-        // This is used for both single items and parts of a split item
-        const createClassroomItemObservables = (
-          currentAssignmentData: ProcessedCourseWork, // Data for the current item/part
-          materialsForThisPart: Material[] // Materials specific to this item/part
-        ): Observable<ProcessedCourseWork> => {
-          console.log(`${itemLogPrefix} (Part: "${currentAssignmentData.title}"): Attempting to get Topic ID.`);
-          return topicId$.pipe( // Use the cached/created topicId$ observable
-            switchMap(topicIdValue => { // Once topic ID is resolved
-              console.log(`${itemLogPrefix} (Part: "${currentAssignmentData.title}"): Topic ID resolved to "${topicIdValue}". Proceeding to create Classroom item.`);
-              // Prepare data for the API call
-              const assignmentDataForApiCall: ProcessedCourseWork = {
-                ...currentAssignmentData,
-                materials: materialsForThisPart,
-                topicId: topicIdValue,
-                description: currentAssignmentData.descriptionForClassroom // Use the classroom-specific description
-              };
-              // Remove fields not intended for the Classroom API payload
-              const {descriptionForDisplay, localFilesToUpload, qtiFile, htmlContent, webLinkUrl, richtext, associatedWithDeveloper, processingError, classroomCourseWorkId, classroomLink, ...apiPayload} = assignmentDataForApiCall;
-
-              // Call the method to create the actual item in Classroom
-              return this.createClassroomItem(authToken, courseId, apiPayload as ProcessedCourseWork).pipe(
-                map(apiResponse => {
-                  // Map successful API response to a ProcessedCourseWork object
-                  const resultItem: ProcessedCourseWork = {
-                    ...currentAssignmentData,
-                    materials: materialsForThisPart,
-                    topicId: topicIdValue,
-                    classroomCourseWorkId: apiResponse.id,
-                    classroomLink: apiResponse.alternateLink,
-                    state: apiResponse.state || 'DRAFT',
-                    processingError: undefined // Clear any previous error
-                  };
-                  console.log(`${itemLogPrefix} (Part: "${resultItem.title}"): Successfully created in Classroom. API Response ID: ${apiResponse.id}, Link: ${apiResponse.alternateLink}`);
-                  return resultItem;
-                }),
-                catchError(classroomCreationError => {
-                  // Handle errors during Classroom item creation
-                  console.error(`${itemLogPrefix} (Part: "${currentAssignmentData.title}"): Failed to create in Classroom. Error: ${classroomCreationError.message || classroomCreationError}`);
-                  const errorItem: ProcessedCourseWork = {...currentAssignmentData, materials: materialsForThisPart, topicId: topicIdValue};
-                  errorItem.processingError = {
-                    message: `Failed to create item "${currentAssignmentData.title}" in Classroom: ${classroomCreationError.message || classroomCreationError}`,
-                    stage: currentAssignmentData.workType === 'MATERIAL' ? 'Classroom Material Creation' : 'Classroom CourseWork Creation',
-                    details: classroomCreationError.details || classroomCreationError.toString()
-                  };
-                  return of(errorItem); // Return the item with error information
-                })
-              );
-            }),
-            catchError(topicResolutionError => {
-              // Handle errors from the topicId$ observable itself (e.g., failure to create/fetch topic)
-              console.error(`${itemLogPrefix} (Part: "${currentAssignmentData.title}"): Failed to resolve topic. Error: ${topicResolutionError.message || topicResolutionError}`);
-              const errorItem: ProcessedCourseWork = {...currentAssignmentData, materials: materialsForThisPart};
-              errorItem.processingError = {
-                message: `Failed to resolve/create topic "${topicName || 'None'}": ${topicResolutionError.message || topicResolutionError}`,
-                stage: 'Topic Management',
-                details: topicResolutionError.details || topicResolutionError.toString()
-              };
-              return of(errorItem); // Return the item with error information
-            })
-          );
+        const baseItemForProcessing: ProcessedCourseWork = {
+          ...originalAssignment,
+          title: originalAssignment.title || 'Untitled Assignment',
+          materials: originalAssignment.materials ? [...originalAssignment.materials] : [],
+          processingError: undefined
         };
+        const itemLogPrefix = `[CS PREP][${serviceCallId}] Item "${baseItemForProcessing.title}" (DevID: ${baseItemForProcessing.associatedWithDeveloper?.id}) for Course ID ${courseId}:`;
 
-        // Check if materials exceed the API limit
-        if (uniqueMaterials.length <= this.materialLimit) {
-          console.log(`${itemLogPrefix} Material count (${uniqueMaterials.length}) is within limit. Creating single Classroom item.`);
-          // If within limit, create a single Classroom item
-          allOperationsObservables.push(createClassroomItemObservables(assignmentForProcessing, uniqueMaterials));
-        } else {
-          // If materials exceed limit, split the assignment into parts
-          console.log(`${itemLogPrefix} Material count (${uniqueMaterials.length}) exceeds limit of ${this.materialLimit}. Splitting into parts.`);
-          const numParts = Math.ceil(uniqueMaterials.length / this.materialLimit);
-          const materialChunks = this.chunkArray(uniqueMaterials, this.materialLimit); // Split materials into chunks
-
-          // Create an observable for each part
-          for (let i = 0; i < numParts; i++) {
-            const partIndex = i + 1;
-            const partTitle = `${assignmentForProcessing.title} (Part ${partIndex} of ${numParts})`;
-            console.log(`${itemLogPrefix} Preparing Part ${partIndex}/${numParts}: "${partTitle}"`);
-            // Create data for this specific part
-            const partAssignmentData: ProcessedCourseWork = {
-              ...assignmentForProcessing, // Base data from the original assignment
-              title: partTitle, // Part-specific title
-              descriptionForClassroom: `Part ${partIndex} of ${numParts}:\n\n${assignmentForProcessing.descriptionForClassroom || ''}`, // Part-specific description
-              // materials will be set by createClassroomItemObservables for this chunk
-            };
-            allOperationsObservables.push(createClassroomItemObservables(partAssignmentData, materialChunks[i]));
+        if (!baseItemForProcessing.title || !baseItemForProcessing.workType) {
+          baseItemForProcessing.processingError = {message: 'Skipped: Missing title or workType.', stage: 'Pre-flight Check (CS)'};
+          if (!allItemsToTrackForBatchResult.find(item => item === baseItemForProcessing)) {
+            allItemsToTrackForBatchResult.push(baseItemForProcessing);
           }
+          console.warn(`${itemLogPrefix} Missing title or workType.`);
+          continue;
         }
-      } // End loop for assignments
-    } // End loop for classroomIds
 
-    // If no operations were prepared (e.g., all assignments failed pre-flight checks)
-    if (allOperationsObservables.length === 0) {
-      console.warn('[ClassroomService] assignContentToClassrooms: No valid operations to perform after pre-flight checks.');
-      // Return original assignments, ensuring any existing processingErrors are preserved or a new one is added
-      return of(assignments.map(a => ({...a, processingError: a.processingError || {message: "No valid operation to perform.", stage: "Pre-flight Check (ClassroomService)"}})));
+        const prepObservableForItem = new Observable<void>(observer => {
+          const topicName = baseItemForProcessing.associatedWithDeveloper?.topic;
+          const cacheKey = `${courseId}:${topicName?.trim().toLowerCase() || 'undefined_topic_key'}`;
+          let topicId$ = topicRequestCache.get(cacheKey);
+
+          if (!topicId$) {
+            // getOrCreateTopicId will fetch its own token
+            topicId$ = this.getOrCreateTopicId(courseId, topicName).pipe(
+              tap(resolvedTopicId => console.log(`${itemLogPrefix} Topic "${topicName || 'None'}" for course ${courseId} resolved to ID: ${resolvedTopicId || 'None'}`)),
+              shareReplay(1),
+              catchError(topicError => {
+                console.error(`${itemLogPrefix} CRITICAL error resolving topic "${topicName}".`, topicError);
+                baseItemForProcessing.processingError = {
+                  message: `Failed to resolve/create topic "${topicName || 'None'}": ${topicError.message || String(topicError)}`,
+                  stage: 'Topic Management (CS)',
+                  details: topicError.details || String(topicError)
+                };
+                if (!allItemsToTrackForBatchResult.find(item => item === baseItemForProcessing)) {
+                  allItemsToTrackForBatchResult.push(baseItemForProcessing);
+                }
+                return of(undefined);
+              })
+            );
+            topicRequestCache.set(cacheKey, topicId$);
+          }
+
+          topicId$.subscribe(topicIdValue => {
+            if (baseItemForProcessing.processingError) {
+              if (!allItemsToTrackForBatchResult.find(item => item === baseItemForProcessing)) {
+                allItemsToTrackForBatchResult.push(baseItemForProcessing);
+              }
+              observer.next(); observer.complete(); return;
+            }
+
+            const uniqueMaterials = this.deduplicateMaterials(baseItemForProcessing.materials || []);
+            let materialChunks = uniqueMaterials.length > this.materialLimit ?
+              this.chunkArray(uniqueMaterials, this.materialLimit) :
+              [uniqueMaterials];
+            if (materialChunks.length === 0 && uniqueMaterials.length === 0) {
+              materialChunks.push([]);
+            }
+
+            materialChunks.forEach((materialChunkForPart, index) => {
+              const numParts = materialChunks.length || 1;
+              const partSuffix = numParts > 1 ? ` (Part ${index + 1} of ${numParts})` : '';
+              const effectiveItemTitle = `${baseItemForProcessing.title}${partSuffix}`;
+              const effectiveItemForPart: ProcessedCourseWork = {
+                ...baseItemForProcessing,
+                title: effectiveItemTitle,
+                materials: materialChunkForPart,
+                classroomCourseWorkId: undefined,
+                classroomLink: undefined,
+                state: baseItemForProcessing.state || 'DRAFT',
+                processingError: undefined,
+              };
+              if (numParts > 1) {
+                effectiveItemForPart.descriptionForClassroom = `Part ${index + 1} of ${numParts}:\n\n${baseItemForProcessing.descriptionForClassroom || ''}`;
+              }
+              allItemsToTrackForBatchResult.push(effectiveItemForPart);
+              let path: string;
+              let operationBody: CourseWork | CourseWorkMaterial;
+              if (effectiveItemForPart.workType === 'MATERIAL') {
+                path = `/v1/courses/${courseId}/courseWorkMaterials`;
+                operationBody = { /* ... as before ... */
+                  title: effectiveItemTitle,
+                  description: effectiveItemForPart.descriptionForClassroom,
+                  materials: materialChunkForPart,
+                  state: effectiveItemForPart.state,
+                  topicId: topicIdValue,
+                  scheduledTime: effectiveItemForPart.scheduledTime,
+                };
+              } else {
+                path = `/v1/courses/${courseId}/courseWork`;
+                operationBody = { /* ... as before ... */
+                  title: effectiveItemTitle,
+                  description: effectiveItemForPart.descriptionForClassroom,
+                  materials: materialChunkForPart,
+                  workType: effectiveItemForPart.workType as CourseWork['workType'],
+                  state: effectiveItemForPart.state,
+                  topicId: topicIdValue,
+                  maxPoints: effectiveItemForPart.maxPoints,
+                  assignment: effectiveItemForPart.workType === 'ASSIGNMENT' ? effectiveItemForPart.assignment : undefined,
+                  multipleChoiceQuestion: effectiveItemForPart.workType === 'MULTIPLE_CHOICE_QUESTION' ? effectiveItemForPart.multipleChoiceQuestion : undefined,
+                  dueDate: effectiveItemForPart.dueDate,
+                  dueTime: effectiveItemForPart.dueTime,
+                  scheduledTime: effectiveItemForPart.scheduledTime,
+                  submissionModificationMode: effectiveItemForPart.submissionModificationMode,
+                };
+              }
+              batchOperationsToExecute.push({
+                id: `op-${serviceCallId}-${operationIdCounter++}`,
+                method: 'POST',
+                path: path,
+                body: operationBody,
+                processedItem: effectiveItemForPart,
+                retriesAttempted: 0
+              });
+            });
+            observer.next();
+            observer.complete();
+          });
+        });
+        preparationObservables.push(prepObservableForItem);
+      }
     }
 
-    // Use forkJoin to execute all prepared operations in parallel
-    console.log(`[ClassroomService] assignContentToClassrooms: Starting forkJoin for ${allOperationsObservables.length} Classroom item creation operations.`);
-    return forkJoin(allOperationsObservables).pipe(
-      tap(results => {
-        // Log summary of batch assignment
-        const successes = results.filter(r => !r.processingError).length;
-        const failures = results.length - successes;
-        console.log(`[ClassroomService] assignContentToClassrooms: Batch assignment process finished. Total operations: ${results.length}, Successes: ${successes}, Failures: ${failures}`);
-        // Log details for each item
-        results.forEach((result, idx) => {
-          if (result.processingError) {
-            console.warn(`[ClassroomService] Failed item [${idx}]: "${result.title}", Error: ${result.processingError.message}, Stage: ${result.processingError.stage}, Details: ${JSON.stringify(result.processingError.details)}`);
-          } else {
-            console.log(`[ClassroomService] Successful item [${idx}]: "${result.title}", Classroom ID: ${result.classroomCourseWorkId}`);
+    return (preparationObservables.length > 0 ? forkJoin(preparationObservables) : of(null as any)).pipe(
+      switchMap(() => {
+        console.log(`[ClassroomService][${serviceCallId}] Prep complete. Batch ops: ${batchOperationsToExecute.length}. Tracked items: ${allItemsToTrackForBatchResult.length}.`);
+        if (batchOperationsToExecute.length > 0) {
+          // Pass the fetched authToken to UtilitiesService
+          return this.utils.executeBatchOperations<ProcessedCourseWork, CourseWork | CourseWorkMaterial>(
+            batchOperationsToExecute,
+            this.defaultRetryConfig,
+            this.utils.GOOGLE_CLASSROOM_BATCH_ENDPOINT_URL,
+            this.utils.GOOGLE_CLASSROOM_MAX_OPERATIONS_PER_BATCH,
+            this.classroomBatchResponseParser
+          ).pipe(
+            map(() => allItemsToTrackForBatchResult)
+          );
+        } else {
+          return of(allItemsToTrackForBatchResult);
+        }
+      }),
+      tap((finalItems: ProcessedCourseWork[]) => {
+        const successes = finalItems.filter(r => !r.processingError).length;
+        const failures = finalItems.length - successes;
+        console.log(`[ClassroomService][${serviceCallId}] assignContentToClassrooms FINALIZED. Total items: ${finalItems.length}, Successes: ${successes}, Failures: ${failures}.`);
+      }),
+      catchError((err: any) => {
+        console.error(`[ClassroomService][${serviceCallId}] Critical error in assignContentToClassrooms pipeline:`, err);
+        allItemsToTrackForBatchResult.forEach(item => {
+          if (!item.processingError) {
+            item.processingError = {
+              message: `Critical batch pipeline error: ${err.message || String(err)}`,
+              stage: 'Batch Pipeline Root (CS)'
+            };
           }
         });
-      }),
-      catchError(err => { // Catch errors from forkJoin itself (should be rare as individual errors are handled)
-        console.error('[ClassroomService] assignContentToClassrooms: Unexpected error in forkJoin. This should ideally be caught by individual operations.', err);
-        return throwError(() => new Error(`Critical error during batch assignment processing: ${err.message || err}`));
+        return of(allItemsToTrackForBatchResult);
       })
     );
   }
 
-
-  // --- Topic Management Methods ---
   /**
-   * Gets the ID of an existing topic by name, or creates it if it doesn't exist.
-   * @param authToken The OAuth 2.0 token.
-   * @param courseId The ID of the course.
-   * @param topicName The name of the topic. If undefined or empty, returns Observable<undefined>.
-   * @returns An Observable of the topic ID string, or undefined if no topicName was provided.
+   * Gets the ID of a topic by name. If it doesn't exist, creates it.
+   * Token is fetched internally.
    */
-  private getOrCreateTopicId(authToken: string, courseId: string, topicName?: string): Observable<string | undefined> {
-    const normalizedTopicName = topicName?.trim(); // Trim whitespace, handles undefined
-    if (!normalizedTopicName) { // If topicName is empty, null, or undefined after trim
-      console.log(`[ClassroomService] getOrCreateTopicId: No topic name provided for course ${courseId}. Item will not have a topic.`);
-      return of(undefined); // Return an observable of undefined, indicating no topic
-    }
+  private getOrCreateTopicId(courseId: string, topicName?: string): Observable<string | undefined> {
+    const normalizedTopicName = topicName?.trim();
+    if (!normalizedTopicName) return of(undefined);
 
-    const lowerCaseTopicName = normalizedTopicName.toLowerCase(); // For case-insensitive comparison
     const context = `getOrCreateTopicId (Course: ${courseId}, Topic: "${normalizedTopicName}")`;
-    console.log(`[ClassroomService] ${context}: Starting.`);
+    // listAllTopics and createTopic will fetch their own tokens
 
-    // First, list all topics for the course
-    return this.listAllTopics(authToken, courseId).pipe(
-      map(allTopics => {
-        // Find a topic with a matching name (case-insensitive)
-        const found = allTopics.find(topic => topic.name?.toLowerCase() === lowerCaseTopicName);
-        console.log(`[ClassroomService] ${context}: Searched ${allTopics.length} topics. Found existing: ${found ? found.topicId : 'No'}`);
-        return found; // Return the found topic object or undefined
-      }),
-      switchMap(existingTopic => {
-        // If an existing topic is found, return its ID
-        if (existingTopic?.topicId) {
-          console.log(`[ClassroomService] ${context}: Using existing topic ID: ${existingTopic.topicId}`);
-          return of(existingTopic.topicId);
-        } else {
-          // If no existing topic is found, create a new one
-          console.log(`[ClassroomService] ${context}: Topic not found. Creating new topic.`);
-          return this.createTopic(authToken, courseId, normalizedTopicName).pipe(
-            map(newTopic => {
-              console.log(`[ClassroomService] ${context}: New topic created with ID: ${newTopic.topicId}`);
-              return newTopic.topicId; // Return the ID of the newly created topic
-            })
-          );
-        }
+    return this.listAllTopics(courseId).pipe( // No authToken passed
+      switchMap(allTopics => {
+        const found = allTopics.find(topic => topic.name?.toLowerCase() === normalizedTopicName.toLowerCase());
+        if (found?.topicId) return of(found.topicId);
+        return this.createTopic(courseId, normalizedTopicName).pipe(map(newTopic => newTopic.topicId)); // No authToken passed
       }),
       catchError(err => {
-        console.error(`[ClassroomService] ${context}: Error during operation.`, err);
-        return this.handleError(err, context); // Use the centralized error handler
+        return throwError(() => this.handleError(err, context));
       })
     );
   }
 
   /**
-   * Lists all topics for a given course, handling pagination.
-   * @param authToken The OAuth 2.0 token.
-   * @param courseId The ID of the course.
-   * @returns An Observable array of Topic objects.
+   * Lists all topics in a given course. Token is fetched internally.
    */
-  private listAllTopics(authToken: string, courseId: string): Observable<Topic[]> {
+  private listAllTopics(courseId: string): Observable<Topic[]> {
     const context = `listAllTopics (Course: ${courseId})`;
-    console.log(`[ClassroomService] ${context}: Fetching all topics.`);
-    // Fetch the first page of topics
-    return this.fetchTopicPage(authToken, courseId, undefined, context).pipe(
-      expand(response => {
-        // If nextPageToken exists, fetch the next page
-        if (response.nextPageToken) {
-          console.log(`[ClassroomService] ${context}: Fetching next page of topics (Token: ${response.nextPageToken}).`);
-          return this.fetchTopicPage(authToken, courseId, response.nextPageToken, `${context} (paginated)`);
-        }
-        return EMPTY; // Complete the expand operator
-      }),
-      map(response => response.topic || []), // Extract topics from each response
-      reduce((acc, topics) => acc.concat(topics), [] as Topic[]), // Accumulate all topics into a single array
-      tap(allTopics => console.log(`[ClassroomService] ${context}: Successfully fetched ${allTopics.length} topics.`)),
+    // fetchTopicPage will fetch its own token
+    return this.fetchTopicPageInternal(courseId, undefined, context).pipe(
+      expand(response => response.nextPageToken ? this.fetchTopicPageInternal(courseId, response.nextPageToken, `${context} (paginated)`) : EMPTY),
+      map(response => response.topic || []),
+      reduce((acc, topics) => acc.concat(topics), [] as Topic[]),
       catchError(err => this.handleError(err, `${context} (Accumulation)`))
     );
   }
 
   /**
-   * Fetches a single page of topics for a course.
-   * @param authToken The OAuth 2.0 token.
-   * @param courseId The ID of the course.
-   * @param pageToken Optional token for fetching a specific page.
-   * @param context A string describing the context of the call for logging.
-   * @returns An Observable of ListTopicsResponse.
+   * Internal version of fetchTopicPage that gets its own token.
    */
-  private fetchTopicPage(authToken: string, courseId: string, pageToken?: string, context: string = 'fetchTopicPage'): Observable<ListTopicsResponse> {
-    const headers = this.createAuthHeaders(authToken);
-    let params = new HttpParams().set('pageSize', this.pageSize); // Use configured page size
-    if (pageToken) {
-      params = params.set('pageToken', pageToken);
+  private fetchTopicPageInternal(courseId: string, pageToken?: string, context: string = 'fetchTopicPageInternal'): Observable<ListTopicsResponse> {
+    const authToken = this.auth.getGoogleAccessToken();
+    if (!authToken) {
+      const errorMsg = `[ClassroomService] ${context}: Auth token is missing.`;
+      console.error(errorMsg);
+      return throwError(() => new Error(errorMsg));
     }
+    const headers = this.createAuthHeaders(authToken);
+    let params = new HttpParams().set('pageSize', this.pageSize);
+    if (pageToken) params = params.set('pageToken', pageToken);
     const url = this.topicsApiUrl(courseId);
-    const operationDescription = `${context} (Course: ${courseId}, Page Token: ${pageToken ?? 'initial'})`;
-    console.log(`[ClassroomService] ${operationDescription}: Making API call to ${url}.`);
+    const operationDescription = `${context} (Course: ${courseId}, Page: ${pageToken ?? 'initial'})`;
     const request$ = this.http.get<ListTopicsResponse>(url, {headers, params});
-    // Retry the request using the utility service
     return this.utils.retryRequest(request$, this.defaultRetryConfig, operationDescription).pipe(
       catchError(err => this.handleError(err, operationDescription))
     );
   }
 
   /**
-   * Creates a new topic in a course.
-   * @param authToken The OAuth 2.0 token.
-   * @param courseId The ID of the course.
-   * @param topicName The name for the new topic.
-   * @returns An Observable of the created Topic object.
+   * Creates a new topic in a course. Token is fetched internally.
    */
-  private createTopic(authToken: string, courseId: string, topicName: string): Observable<Topic> {
+  private createTopic(courseId: string, topicName: string): Observable<Topic> {
+    const authToken = this.auth.getGoogleAccessToken();
+    if (!authToken) {
+      const errorMsg = `[ClassroomService] createTopic (Course: ${courseId}, Topic: "${topicName}"): Auth token is missing.`;
+      console.error(errorMsg);
+      return throwError(() => new Error(errorMsg));
+    }
     const headers = this.createAuthHeaders(authToken);
     const url = this.topicsApiUrl(courseId);
-    const body = {name: topicName}; // API request body
+    const body = {name: topicName};
     const context = `createTopic (Course: ${courseId}, Topic: "${topicName}")`;
-    console.log(`[ClassroomService] ${context}: Making API call to ${url} with body:`, body);
     const request$ = this.http.post<Topic>(url, body, {headers});
-    // Retry the request using the utility service
     return this.utils.retryRequest(request$, this.defaultRetryConfig, context).pipe(
-      map(topic => {
-        console.log(`[ClassroomService] ${context}: Topic created successfully. ID: ${topic.topicId}, Name: "${topic.name}"`);
-        return topic;
-      }),
       catchError(err => this.handleError(err, context))
     );
   }
 
-  // --- Unified CourseWork / CourseWorkMaterial Creation Method ---
   /**
-   * Creates either a CourseWork item (assignment, question) or a CourseWorkMaterial item in Classroom.
-   * The type is determined by `itemData.workType`.
-   * @param authToken The OAuth 2.0 token.
-   * @param courseId The ID of the course.
-   * @param itemData Data for the item to be created. Should be ProcessedCourseWork with only API-relevant fields.
-   * @returns An Observable of the created CourseWork or CourseWorkMaterial object.
-   */
-  private createClassroomItem(
-    authToken: string,
-    courseId: string,
-    itemData: ProcessedCourseWork // Expects ProcessedCourseWork with only API relevant fields
-  ): Observable<CourseWork | CourseWorkMaterial> {
-    const headers = this.createAuthHeaders(authToken);
-    const itemLogPrefix = `[ClassroomService] createClassroomItem (Course: ${courseId}, Title: "${itemData.title}", Type: ${itemData.workType})`;
-
-    console.log(`${itemLogPrefix}: Preparing to create item.`);
-
-    // Validate required fields
-    if (!itemData.title || !itemData.workType) {
-      const errorMsg = `${itemLogPrefix}: Missing required field(s) (title, workType). Cannot create item.`;
-      console.error(errorMsg, 'Item Data:', itemData);
-      return throwError(() => new Error(errorMsg));
-    }
-
-    // Handle CourseWorkMaterial creation
-    if (itemData.workType === 'MATERIAL') {
-      const materialBody: CourseWorkMaterial = {
-        title: itemData.title,
-        description: itemData.description, // This should be descriptionForClassroom
-        materials: itemData.materials,
-        state: itemData.state || 'DRAFT', // Default to DRAFT if not specified
-        topicId: itemData.topicId,
-        scheduledTime: itemData.scheduledTime
-        // assigneeMode is not applicable for materials (always ALL_STUDENTS by API default)
-      };
-      const url = this.courseWorkMaterialsApiUrl(courseId);
-      console.log(`${itemLogPrefix}: Submitting as CourseWorkMaterial to ${url}. Body:`, JSON.stringify(materialBody));
-      const request$ = this.http.post<CourseWorkMaterial>(url, materialBody, {headers});
-      return this.utils.retryRequest(request$, this.defaultRetryConfig, `${itemLogPrefix} as MATERIAL`).pipe(
-        map(createdMaterial => {
-          console.log(`${itemLogPrefix}: CourseWorkMaterial created successfully. ID: ${createdMaterial.id}`);
-          return createdMaterial;
-        }),
-        catchError(err => {
-          console.error(`${itemLogPrefix}: Error creating CourseWorkMaterial.`, err);
-          return this.handleError(err, `${itemLogPrefix} as MATERIAL`);
-        })
-      );
-    } else { // Handle CourseWork creation (ASSIGNMENT, SHORT_ANSWER_QUESTION, MULTIPLE_CHOICE_QUESTION)
-      // Validate workType for CourseWork
-      const validWorkTypes: Array<CourseWork['workType']> = ['ASSIGNMENT', 'SHORT_ANSWER_QUESTION', 'MULTIPLE_CHOICE_QUESTION'];
-      if (!validWorkTypes.includes(itemData.workType as any)) {
-        const errorMsg = `${itemLogPrefix}: Invalid workType "${itemData.workType}" for CourseWork.`;
-        console.error(errorMsg, 'Item Data:', itemData);
-        return throwError(() => new Error(errorMsg));
-      }
-
-      const courseWorkBody: CourseWork = {
-        title: itemData.title,
-        description: itemData.description, // This should be descriptionForClassroom
-        materials: itemData.materials,
-        workType: itemData.workType as 'ASSIGNMENT' | 'SHORT_ANSWER_QUESTION' | 'MULTIPLE_CHOICE_QUESTION',
-        state: itemData.state || 'DRAFT', // Default to DRAFT
-        topicId: itemData.topicId,
-        maxPoints: itemData.maxPoints,
-        // Conditionally add assignment-specific or question-specific fields
-        assignment: itemData.workType === 'ASSIGNMENT' ? itemData.assignment : undefined,
-        multipleChoiceQuestion: itemData.workType === 'MULTIPLE_CHOICE_QUESTION' ? itemData.multipleChoiceQuestion : undefined,
-        dueDate: itemData.dueDate,
-        dueTime: itemData.dueTime,
-        scheduledTime: itemData.scheduledTime,
-        submissionModificationMode: itemData.submissionModificationMode
-        // assigneeMode defaults to ALL_STUDENTS if not specified, as per Classroom API behavior
-      };
-      const url = this.courseWorkApiUrl(courseId);
-      console.log(`${itemLogPrefix}: Submitting as CourseWork to ${url}. Body:`, JSON.stringify(courseWorkBody));
-      const request$ = this.http.post<CourseWork>(url, courseWorkBody, {headers});
-      return this.utils.retryRequest(request$, this.defaultRetryConfig, itemLogPrefix).pipe(
-        map(createdWork => {
-          console.log(`${itemLogPrefix}: CourseWork created successfully. ID: ${createdWork.id}`);
-          return createdWork;
-        }),
-        catchError(err => {
-          console.error(`${itemLogPrefix}: Error creating CourseWork.`, err);
-          return this.handleError(err, itemLogPrefix);
-        })
-      );
-    }
-  }
-
-  // --- Utility and Error Handling ---
-  /**
-   * Creates standard HTTP headers for API requests, including Authorization.
-   * @param authToken The OAuth 2.0 token.
-   * @returns HttpHeaders object.
+   * Creates standard HTTP headers for authenticated API calls.
+   * This method still accepts authToken as a parameter.
    */
   private createAuthHeaders(authToken: string): HttpHeaders {
     return new HttpHeaders({
       'Authorization': `Bearer ${authToken}`,
       'Accept': 'application/json',
-      'Content-Type': 'application/json' // Important for POST/PATCH requests
+      'Content-Type': 'application/json'
     });
   }
 
   /**
    * Splits an array into chunks of a specified size.
-   * @param array The array to chunk.
-   * @param size The size of each chunk.
-   * @returns A new array containing the chunks.
    */
   private chunkArray<T>(array: T[], size: number): T[][] {
     if (!array) return [];
@@ -563,24 +441,18 @@ export class ClassroomService {
   }
 
   /**
-   * Generates a unique key for a material based on its type and ID/URL.
-   * Used for deduplication.
-   * @param material The Material object.
-   * @returns A string key or null if no identifiable key can be generated.
+   * Generates a unique key for a Material object.
    */
   private getMaterialKey(material: Material): string | null {
     if (material.driveFile?.driveFile?.id) return `drive-${material.driveFile.driveFile.id}`;
     if (material.youtubeVideo?.id) return `youtube-${material.youtubeVideo.id}`;
-    if (material.link?.url) return `link-${material.link.url}`;
-    if (material.form?.formUrl) return `form-${material.form.formUrl}`;
-    // If other material types are supported, add their key generation here
-    return null; // Should not happen if material is a recognized type and valid
+    if (material.link?.url) return `link-${this.utils.tryDecodeURIComponent(material.link.url).toLowerCase()}`;
+    if (material.form?.formUrl) return `form-${this.utils.tryDecodeURIComponent(material.form.formUrl).toLowerCase()}`;
+    return null;
   }
 
   /**
-   * Deduplicates an array of Material objects based on their unique keys.
-   * @param materials Array of Material objects.
-   * @returns A new array with unique Material objects.
+   * Deduplicates an array of Material objects.
    */
   private deduplicateMaterials(materials: Material[]): Material[] {
     if (!materials || materials.length === 0) return [];
@@ -588,61 +460,43 @@ export class ClassroomService {
     const uniqueMaterials: Material[] = [];
     for (const material of materials) {
       const key = this.getMaterialKey(material);
-      if (key !== null && !seenKeys.has(key)) { // If key is valid and not seen before
+      if (key !== null && !seenKeys.has(key)) {
         seenKeys.add(key);
         uniqueMaterials.push(material);
-      } else if (key === null) { // If material has no identifiable key (e.g., malformed or new type)
-        console.warn('[ClassroomService] deduplicateMaterials: Encountered material with no identifiable key, including as is.', material);
-        uniqueMaterials.push(material); // Include it but log a warning
-      } else { // If key has been seen (duplicate)
-        console.log(`[ClassroomService] deduplicateMaterials: Duplicate material skipped (Key: ${key})`);
+      } else if (key === null) {
+        uniqueMaterials.push(material);
       }
     }
     return uniqueMaterials;
   }
 
   /**
-   * Centralized error handler for API requests.
-   * Logs the error and throws a new error with a user-friendly message and details.
-   * @param error The error object (HttpErrorResponse or Error).
-   * @param context A string describing the operation context where the error occurred.
-   * @returns An Observable that throws the processed error.
+   * Centralized error handler.
    */
   private handleError(error: HttpErrorResponse | Error, context: string = 'Unknown Operation'): Observable<never> {
-    let userMessage = `Failed during ${context}; please try again later or check console for details.`;
-    let detailedMessage = `Context: ${context} - An unknown error occurred!`;
-    let statusCode: number | undefined = undefined;
-    let errorDetailsForPropagation: any = error; // Default to the original error object for propagation
+    let userMessage = `Failed during ${context}; please try again or check console.`;
+    let detailedMessage = `Context: ${context} - Unknown error.`;
+    let statusCode: number | undefined;
+    let errorDetailsForPropagation: any = error;
 
     if (error instanceof HttpErrorResponse) {
       statusCode = error.status;
-      detailedMessage = `Context: ${context} - Server error: Code ${error.status}, Message: ${error.message || 'No message body'}`;
-      userMessage = `The server returned an error (Code: ${error.status}) while processing ${context}. Please check details or try again.`;
-      errorDetailsForPropagation = error.error || error.message; // Prefer error.error (parsed body) if available
-      try {
-        const errorBody = JSON.stringify(error.error); // Attempt to stringify the error body for logging
-        detailedMessage += `, Body: ${errorBody}`;
-        // Check for standard Google API error structure in the response body
-        const googleApiError = error.error?.error?.message;
-        if (googleApiError) {
-          userMessage = `Google API Error in ${context}: ${googleApiError} (Code: ${error.status})`;
-          detailedMessage += ` | Google API Specific: ${googleApiError}`;
-        }
-      } catch (e) { /* Ignore JSON stringify errors if error.error is not a simple object */}
-    } else if (error instanceof Error) { // Client-side or network errors
-      detailedMessage = `Context: ${context} - Client/Network error: ${error.message}`;
-      userMessage = `A network or client-side error occurred in ${context}. Please check your connection or the console. Details: ${error.message}`;
-      errorDetailsForPropagation = error.message;
+      detailedMessage = `Context: ${context} - ${this.utils.formatHttpError(error)}`;
+      userMessage = `Server error (Code: ${error.status}) in ${context}.`;
+      errorDetailsForPropagation = error.error || {message: error.message, status: error.status};
+      const googleApiError = error.error?.error?.message;
+      if (googleApiError) userMessage = `Google API Error in ${context}: ${googleApiError} (${error.status})`;
+    } else if (error instanceof Error) {
+      detailedMessage = `Context: ${context} - Client error: ${error.message}`;
+      userMessage = `Client error in ${context}: ${error.message}`;
+      errorDetailsForPropagation = {message: error.message, name: error.name};
     }
 
-    console.error(`[ClassroomService] handleError: ${detailedMessage}`, 'Full Error Object:', error);
-
-    // Create a new error object to be thrown, including user-friendly message and structured details
+    console.error(`[ClassroomService] handleError: ${detailedMessage}`, error);
     const finalError = new Error(userMessage);
-    (finalError as any).status = statusCode; // Attach HTTP status code if available
-    (finalError as any).details = errorDetailsForPropagation; // Attach more detailed error info (e.g., server response body)
-    (finalError as any).stage = context; // Add context as a 'stage' property for easier debugging
-
-    return throwError(() => finalError); // Return an observable that emits the error
+    (finalError as any).status = statusCode;
+    (finalError as any).details = errorDetailsForPropagation;
+    (finalError as any).stage = context;
+    return throwError(() => finalError);
   }
 }

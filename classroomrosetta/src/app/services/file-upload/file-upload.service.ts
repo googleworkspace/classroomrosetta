@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,6 +20,7 @@ import {Observable, throwError, of, forkJoin, from} from 'rxjs';
 import {switchMap, catchError, map, tap} from 'rxjs/operators';
 import {ImsccFile, DriveFile} from '../../interfaces/classroom-interface';
 import {UtilitiesService, RetryConfig} from '../utilities/utilities.service';
+import {AuthService} from '../auth/auth.service';
 
 @Injectable({
   providedIn: 'root'
@@ -29,6 +30,7 @@ export class FileUploadService {
   // Inject dependencies
   private http = inject(HttpClient);
   private utils = inject(UtilitiesService);
+  private auth = inject(AuthService); // Inject AuthService
 
   // Custom property key to store the source identifier HASH
   private readonly APP_PROPERTY_KEY = 'imsccIdentifier';
@@ -39,30 +41,40 @@ export class FileUploadService {
   constructor() { }
 
   /**
+   * Creates Drive API headers, fetching token internally.
+   * @returns HttpHeaders object or null if token is missing.
+   */
+  private createDriveApiHeaders(): HttpHeaders | null {
+    const accessToken = this.auth.getGoogleAccessToken();
+    if (!accessToken) {
+      console.error('[FileUploadService] Cannot create Drive API headers: Access token is missing.');
+      return null;
+    }
+
+    return new HttpHeaders({
+      'Authorization': `Bearer ${accessToken}`
+    });
+  }
+
+  /**
    * Uploads an array of local files (ImsccFile) to a Google Drive folder using HASHED identifiers.
-   * Includes retry logic for Drive API calls.
-   * Ensures specified fields (including thumbnailLink) are requested in API responses.
+   * Token is fetched internally just before API calls.
    *
    * @param localFilesToUpload Array of objects containing the ImsccFile and the target file name.
-   * @param accessToken A valid Google OAuth 2.0 access token with Drive scope.
    * @param parentFolderId The ID of the Google Drive folder where files should be uploaded/searched.
    * @returns Observable<DriveFile[]> Emitting an array of the Google Drive File resource objects (found or uploaded).
    */
   uploadLocalFiles(
     localFilesToUpload: Array<{file: ImsccFile; targetFileName: string}>,
-    accessToken: string,
     parentFolderId: string
   ): Observable<DriveFile[]> {
     if (!localFilesToUpload || localFilesToUpload.length === 0) {
       console.log("[FileUploadService] No local files provided for upload.");
       return of([]);
     }
-    if (!accessToken) return throwError(() => new Error('[FileUploadService] Access token is required for file upload.'));
+
     if (!parentFolderId) return throwError(() => new Error('[FileUploadService] Parent folder ID is required for file upload.'));
 
-    const headers = new HttpHeaders({
-      'Authorization': `Bearer ${accessToken}`
-    });
     const retryConfig: RetryConfig = {maxRetries: 3, initialDelayMs: 2000};
 
     const findOrUploadObservables: Observable<DriveFile>[] = localFilesToUpload.map(fileToUpload => {
@@ -71,21 +83,18 @@ export class FileUploadService {
         console.error(`[FileUploadService] Skipping file "${fileToUpload.targetFileName}": Missing original file name (identifier).`);
         return throwError(() => new Error(`[FileUploadService] Missing identifier for file: ${fileToUpload.targetFileName}`));
       }
+
       let fileDataSize: number;
       if (fileToUpload.file.data instanceof ArrayBuffer) {
         fileDataSize = fileToUpload.file.data.byteLength;
       } else if (typeof fileToUpload.file.data === 'string') {
-        // For strings (text, base64 data URIs), use character length.
-        // This serves as a good proxy for size, especially for text content changes
-        // or variations in base64 encoded data.
         fileDataSize = fileToUpload.file.data.length;
       } else {
-        // Fallback if data is somehow neither (should not occur with current ImsccFile types)
         console.warn(`[FileUploadService] Could not determine data size for file "${fileToUpload.targetFileName}" (original identifier: "${originalFileIdentifier}"). Using size 0 for hash generation.`);
         fileDataSize = 0;
       }
       const compositeIdentifierString = `${originalFileIdentifier}|size:${fileDataSize}`;
-      console.log(`[FileUploadService] String to hash for "${fileToUpload.targetFileName}": "${compositeIdentifierString}" (Original Name: "${originalFileIdentifier}", Size: ${fileDataSize} units)`);
+
       return from(this.utils.generateHash(compositeIdentifierString)).pipe(
         catchError(hashError => {
           console.error(`[FileUploadService] Error generating hash for "${originalFileIdentifier}":`, hashError);
@@ -93,16 +102,19 @@ export class FileUploadService {
           return throwError(() => new Error(`[FileUploadService] Failed to generate identifier for ${fileToUpload.targetFileName}. ${errorMessage}`));
         }),
         switchMap(hashedIdentifier => {
+          const searchHeaders = this.createDriveApiHeaders();
+          if (!searchHeaders) {
+            return throwError(() => new Error(`[FileUploadService] Authentication token missing for searching file: ${fileToUpload.targetFileName}`));
+          }
 
-          console.log(`[FileUploadService] Searching for existing file with hash "${hashedIdentifier}" (from "${originalFileIdentifier}") in folder ${parentFolderId}...`);
-          const searchQuery = `'${parentFolderId}' in parents and appProperties has { key='${this.APP_PROPERTY_KEY}' and value='${hashedIdentifier}' } and trashed = false`;
+          const searchQuery = `'${parentFolderId}' in parents and appProperties has { key='${this.APP_PROPERTY_KEY}' and value='${this.utils.escapeQueryParam(hashedIdentifier)}' } and trashed = false`;
           const searchParams = new HttpParams()
             .set('q', searchQuery)
             .set('fields', `files(${this.DRIVE_FILE_FIELDS_TO_REQUEST})`)
             .set('spaces', 'drive');
 
           const searchRequest$ = this.http.get<{files: DriveFile[]}>(
-            this.utils.DRIVE_API_FILES_ENDPOINT, {headers, params: searchParams}
+            this.utils.DRIVE_API_FILES_ENDPOINT, {headers: searchHeaders, params: searchParams}
           );
 
           return this.utils.retryRequest(
@@ -116,18 +128,11 @@ export class FileUploadService {
                 console.log(`[FileUploadService] Found existing file for hash "${hashedIdentifier}": ID=${foundFile.id}, Name=${foundFile.name}. Thumbnail: ${foundFile.thumbnailLink ? 'Available' : 'Not Available'}. Skipping upload.`);
                 return of(foundFile);
               } else {
-                console.log(`[FileUploadService] No existing file found for hash "${hashedIdentifier}". Uploading "${fileToUpload.targetFileName}"...`);
-
-
-                let blobPreparation$: Observable<Blob | null>; // Changed to allow null for error case propagation
-
+                let blobPreparation$: Observable<Blob | null>;
+                // ... (blobPreparation$ logic remains the same) ...
                 if (typeof fileToUpload.file.data === 'string' && fileToUpload.file.data.startsWith('data:')) {
-                  // It's a data URI (likely a base64 image from FileUploadComponent)
-                  console.log(`[FileUploadService] Preparing blob from data URI for: ${fileToUpload.targetFileName}`);
                   blobPreparation$ = from(this.utils.dataUriToBlob(fileToUpload.file.data, fileToUpload.file.mimeType));
                 } else if (fileToUpload.file.data instanceof ArrayBuffer) {
-                  // It's an ArrayBuffer (other binary file)
-                  console.log(`[FileUploadService] Preparing blob directly from ArrayBuffer for: ${fileToUpload.targetFileName}`);
                   try {
                     blobPreparation$ = of(new Blob([fileToUpload.file.data], {type: fileToUpload.file.mimeType}));
                   } catch (e: any) {
@@ -135,8 +140,6 @@ export class FileUploadService {
                     blobPreparation$ = throwError(() => new Error(`Failed to create Blob from ArrayBuffer for ${fileToUpload.targetFileName}: ${e.message}`));
                   }
                 } else if (typeof fileToUpload.file.data === 'string') {
-                  // It's a plain string (e.g., text, XML, HTML)
-                  console.log(`[FileUploadService] Preparing blob from plain string data for: ${fileToUpload.targetFileName}`);
                   try {
                     blobPreparation$ = of(new Blob([fileToUpload.file.data], {type: fileToUpload.file.mimeType}));
                   } catch (e: any) {
@@ -148,13 +151,20 @@ export class FileUploadService {
                   blobPreparation$ = throwError(() => new Error(`Unexpected data type for file: ${fileToUpload.targetFileName}`));
                 }
 
+
                 return blobPreparation$.pipe(
                   switchMap(fileBlob => {
                     if (!fileBlob) {
-                      console.error(`[FileUploadService] Skipping upload for "${fileToUpload.targetFileName}": Blob preparation resulted in null or error was not caught properly.`);
+                      console.error(`[FileUploadService] Skipping upload for "${fileToUpload.targetFileName}": Blob preparation resulted in null.`);
                       return throwError(() => new Error(`Blob preparation failed for file: ${fileToUpload.targetFileName}`));
                     }
-                    console.log(`[FileUploadService] Uploading blob for "${fileToUpload.targetFileName}" (Type: ${fileBlob.type}, Size: ${fileBlob.size} bytes) to folder ${parentFolderId}...`);
+
+                    // Fetch token for upload operation
+                    const uploadHeaders = this.createDriveApiHeaders();
+                    if (!uploadHeaders) {
+                      return throwError(() => new Error(`[FileUploadService] Authentication token missing for uploading file: ${fileToUpload.targetFileName}`));
+                    }
+
                     const metadata = {
                       name: fileToUpload.targetFileName,
                       parents: [parentFolderId],
@@ -165,16 +175,12 @@ export class FileUploadService {
                     formData.append('metadata', metadataBlob);
                     formData.append('file', fileBlob, fileToUpload.targetFileName);
 
-                    // The DRIVE_API_UPLOAD_ENDPOINT should already include ?uploadType=multipart
-                    // And we add 'fields' to get specific response data including thumbnailLink.
                     const uploadUrlWithFields = `${this.utils.DRIVE_API_UPLOAD_ENDPOINT}${this.utils.DRIVE_API_UPLOAD_ENDPOINT.includes('?') ? '&' : '?'}fields=${encodeURIComponent(this.DRIVE_FILE_FIELDS_TO_REQUEST)}`;
-
-                    console.log(`[FileUploadService] Upload URL with fields: ${uploadUrlWithFields}`);
 
                     const uploadRequest$ = this.http.post<DriveFile>(
                       uploadUrlWithFields,
                       formData,
-                      {headers}
+                      {headers: uploadHeaders}
                     );
 
                     return this.utils.retryRequest(
@@ -182,45 +188,28 @@ export class FileUploadService {
                       retryConfig,
                       `Upload File "${fileToUpload.targetFileName}"`
                     ).pipe(
-                      // This inner switchMap is for the explicit GET request after upload
-                      switchMap(initialUploadedFileResponse => {
-                        console.log(`[FileUploadService] Initial response received for upload of "${fileToUpload.targetFileName}":`, JSON.stringify(initialUploadedFileResponse, null, 2));
-                        if (!initialUploadedFileResponse || !initialUploadedFileResponse.id) {
-                          console.error(`[FileUploadService] Failed to upload file "${fileToUpload.targetFileName}" to Google Drive. Initial response missing ID:`, initialUploadedFileResponse);
-                          throw new Error(`[FileUploadService] Failed to upload file "${fileToUpload.targetFileName}" to Google Drive (initial response missing ID).`);
+                      tap(uploadedFileResponse => {
+                        console.log(`[FileUploadService] File uploaded. Response: ID=${uploadedFileResponse.id}, Name=${uploadedFileResponse.name}. WebViewLink: ${uploadedFileResponse.webViewLink}, Thumbnail: ${uploadedFileResponse.thumbnailLink ? 'Available' : 'Not Available'}`);
+                        if (uploadedFileResponse.appProperties?.[this.APP_PROPERTY_KEY] === hashedIdentifier) {
+                          console.log(`   App property "${this.APP_PROPERTY_KEY}" successfully set and verified in upload response.`);
+                        } else {
+                          console.warn(`   App property "${this.APP_PROPERTY_KEY}" mismatch or missing in upload response for ${uploadedFileResponse.name}. Expected: ${hashedIdentifier}, Got: ${uploadedFileResponse.appProperties?.[this.APP_PROPERTY_KEY]}`);
                         }
-                        console.log(`[FileUploadService] File created with ID: ${initialUploadedFileResponse.id}. Now fetching full metadata including thumbnailLink...`);
-
-                        const getFileMetadataUrl = `${this.utils.DRIVE_API_FILES_ENDPOINT}/${initialUploadedFileResponse.id}`;
-                        const getFileParams = new HttpParams().set('fields', this.DRIVE_FILE_FIELDS_TO_REQUEST);
-                        const getFileRequest$ = this.http.get<DriveFile>(getFileMetadataUrl, {headers, params: getFileParams});
-
-                        return this.utils.retryRequest(
-                          getFileRequest$,
-                          retryConfig,
-                          `Get Metadata for File ID ${initialUploadedFileResponse.id}`
-                        ).pipe(
-                          tap(fullFileMetadata => {
-                            console.log(`[FileUploadService] Successfully fetched full metadata for file: ID=${fullFileMetadata.id}, Name=${fullFileMetadata.name}. WebViewLink: ${fullFileMetadata.webViewLink}, Thumbnail: ${fullFileMetadata.thumbnailLink ? 'Available' : 'Not Available'}`);
-                            if (fullFileMetadata.appProperties) {
-                              console.log(`   Associated ${this.APP_PROPERTY_KEY}: ${fullFileMetadata.appProperties[this.APP_PROPERTY_KEY]} (Hash of: "${originalFileIdentifier}")`);
-                            } else {
-                              console.warn(`   No appProperties found on fetched metadata for file: ${fullFileMetadata.id}`);
-                            }
-                          })
-                        );
+                        if (!uploadedFileResponse.thumbnailLink) {
+                          console.warn(`   ThumbnailLink not available in upload response for ${uploadedFileResponse.name} (ID: ${uploadedFileResponse.id}). It might generate shortly.`);
+                        }
                       }),
                       catchError(err => {
-                        console.error(`[FileUploadService] Raw error object during upload/metadata fetch of "${fileToUpload.targetFileName}":`, err);
+                        console.error(`[FileUploadService] Raw error object during upload of "${fileToUpload.targetFileName}":`, err);
                         const formattedError = this.utils.formatHttpError(err);
-                        console.error(`[FileUploadService] Error during upload or metadata fetch for "${fileToUpload.targetFileName}" (final after retries - formatted):`, formattedError);
+                        console.error(`[FileUploadService] Error during upload for "${fileToUpload.targetFileName}" (final after retries - formatted):`, formattedError);
                         let detail = formattedError;
                         if (err instanceof HttpErrorResponse) {
                           detail = `Status: ${err.status}, StatusText: ${err.statusText}, Message: ${err.message}, Body: ${JSON.stringify(err.error)}`;
                         } else if (err instanceof Error) {
                           detail = err.message;
                         }
-                        return throwError(() => new Error(`[FileUploadService] Upload or metadata fetch failed for ${fileToUpload.targetFileName}. Details: ${detail}`));
+                        return throwError(() => new Error(`[FileUploadService] Upload failed for ${fileToUpload.targetFileName}. Details: ${detail}`));
                       })
                     );
                   }),
@@ -244,7 +233,7 @@ export class FileUploadService {
 
     return forkJoin(findOrUploadObservables).pipe(
       map(results => {
-        console.log(`[FileUploadService] Find-or-upload process completed for ${results.length} files.`, results);
+        console.log(`[FileUploadService] Find-or-upload process completed for ${results.length} files.`);
         return results;
       }),
       catchError(err => {

@@ -15,10 +15,11 @@
  */
 
 import { Injectable, inject } from '@angular/core';
-import {HttpClient, HttpHeaders, HttpParams} from '@angular/common/http';
+import {HttpClient, HttpHeaders, HttpParams, HttpErrorResponse} from '@angular/common/http';
 import { Observable, of, throwError, from } from 'rxjs';
 import { map, catchError, switchMap, shareReplay, tap } from 'rxjs/operators';
 import {UtilitiesService} from '../utilities/utilities.service';
+import {AuthService} from '../auth/auth.service'; // Import AuthService
 
 /**
  * Interface for Google Drive API File resource (simplified)
@@ -29,6 +30,9 @@ interface DriveFile {
   mimeType: string;
   parents?: string[];
   appProperties?: {[key: string]: string};
+  // Add other fields like webViewLink, thumbnailLink if needed by this service directly
+  webViewLink?: string;
+  thumbnailLink?: string;
 }
 
 /**
@@ -45,10 +49,11 @@ export class DriveFolderService {
 
   // Inject dependencies
   private http = inject(HttpClient);
-  private utils = inject(UtilitiesService); // Inject UtilitiesService for hashing, helpers, and retryRequest
+  private utils = inject(UtilitiesService);
+  private auth = inject(AuthService); // Inject AuthService
 
-  // Use Drive endpoints from UtilitiesService if available, otherwise define here
-  private readonly DRIVE_API_URL = this.utils.DRIVE_API_FILES_ENDPOINT || 'https://www.googleapis.com/drive/v3/files';
+  // Use Drive endpoints from UtilitiesService
+  private readonly DRIVE_API_URL = this.utils.DRIVE_API_FILES_ENDPOINT;
 
   // Root folder name constant
   private readonly ROOT_IMPORT_FOLDER_NAME = 'LMS Import';
@@ -56,35 +61,56 @@ export class DriveFolderService {
   // Custom property key to store the source identifier HASH
   private readonly ITEM_ID_HASH_PROPERTY_KEY = 'itemIdHash';
 
-  // Cache for the root import folder ID
-  private rootImportFolderId$: Observable<string> | null = null;
+  // Cache for findOrCreateFolder operations
+  private findOrCreateFolderCache = new Map<string, Observable<string>>();
+
+  // Cache for the root import folder ID observable specifically
+  private rootImportFolderIdObservable$: Observable<string> | null = null;
 
   constructor() { }
 
   /**
-   * Finds a folder by its associated ItemId HASH stored in appProperties.
-   * Includes retry logic.
-   *
-   * @param hashedItemId The HASHED ItemId to search for.
-   * @param accessToken A valid Google OAuth 2.0 access token.
-   * @returns Observable emitting the folder ID if found, or null otherwise.
+   * Creates standard HTTP headers for authenticated Drive API calls.
+   * Fetches token internally.
+   * @param contentType Optional content type, defaults to 'application/json'.
+   * @returns HttpHeaders object or null if token is missing.
    */
-  private findFolderByHashedItemId(hashedItemId: string, accessToken: string): Observable<string | null> {
-    const headers = new HttpHeaders({
+  private createDriveApiHeaders(contentType: string = 'application/json'): HttpHeaders | null {
+    const accessToken = this.auth.getGoogleAccessToken();
+    if (!accessToken) {
+      console.error('[DriveFolderService] Cannot create Drive API headers: Access token is missing.');
+      return null;
+    }
+    let headers = new HttpHeaders({
       'Authorization': `Bearer ${accessToken}`
     });
+    if (contentType) {
+      headers = headers.set('Content-Type', contentType);
+    }
+    return headers;
+  }
+
+
+  /**
+   * Finds a folder by its associated ItemId HASH stored in appProperties.
+   * Token is fetched internally.
+   */
+  private findFolderByHashedItemId(hashedItemId: string): Observable<string | null> {
+    const headers = this.createDriveApiHeaders();
+    if (!headers) {
+      return throwError(() => new Error('[DriveFolderService] Authentication token missing for findFolderByHashedItemId.'));
+    }
+
     const query = `appProperties has { key='${this.ITEM_ID_HASH_PROPERTY_KEY}' and value='${this.escapeQueryParam(hashedItemId)}' } and mimeType='application/vnd.google-apps.folder' and trashed=false`;
     const params = new HttpParams()
       .set('q', query)
       .set('fields', 'files(id, name, appProperties)')
       .set('spaces', 'drive');
 
-    console.log(`Searching for folder by ItemId HASH "${hashedItemId}"`);
+    // console.log(`Searching for folder by ItemId HASH "${hashedItemId}"`);
 
-    // Define the request
     const searchRequest$ = this.http.get<DriveFileList>(this.DRIVE_API_URL, { headers, params });
 
-    // Wrap with retry logic
     return this.utils.retryRequest(
         searchRequest$,
       {maxRetries: 3, initialDelayMs: 1000},
@@ -96,48 +122,42 @@ export class DriveFolderService {
           console.log(`Found folder "${foundFolder.name}" with ID: ${foundFolder.id} matching ItemId HASH "${hashedItemId}"`);
           return foundFolder.id;
         } else {
-          console.log(`Folder with ItemId HASH "${hashedItemId}" not found.`);
+          // console.log(`Folder with ItemId HASH "${hashedItemId}" not found.`);
           return null;
         }
       }),
-      // Final catchError after retries
       catchError(error => {
         const formattedError = this.utils.formatHttpError(error);
         console.error(`Error finding folder by ItemId HASH "${hashedItemId}" (final after retries):`, formattedError);
         console.warn(`Search failed for ItemId HASH "${hashedItemId}", proceeding as if not found.`);
-        return of(null); // Return null to allow creation logic
+        return of(null);
       })
     );
   }
 
   /**
    * Finds a folder by name within a specific parent folder.
-   * Includes retry logic.
-   *
-   * @param folderName The name of the folder to find.
-   * @param parentFolderId The ID of the parent folder ('root' for My Drive).
-   * @param accessToken A valid Google OAuth 2.0 access token.
-   * @returns Observable emitting the folder ID if found, or null otherwise.
+   * Token is fetched internally.
    */
-  private findFolderByName(folderName: string, parentFolderId: string, accessToken: string): Observable<string | null> {
-    const headers = new HttpHeaders({
-      'Authorization': `Bearer ${accessToken}`
-    });
+  private findFolderByName(folderName: string, parentFolderId: string): Observable<string | null> {
+    const headers = this.createDriveApiHeaders();
+    if (!headers) {
+      return throwError(() => new Error('[DriveFolderService] Authentication token missing for findFolderByName.'));
+    }
+
     const query = `name='${this.escapeQueryParam(folderName)}' and '${parentFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
     const params = new HttpParams()
       .set('q', query)
       .set('fields', 'files(id, name)')
       .set('spaces', 'drive');
 
-    console.log(`Searching for folder "${folderName}" in parent "${parentFolderId}"`);
+    // console.log(`Searching for folder "${folderName}" in parent "${parentFolderId}"`);
 
-    // Define the request
     const searchRequest$ = this.http.get<DriveFileList>(this.DRIVE_API_URL, { headers, params });
 
-    // Wrap with retry logic
     return this.utils.retryRequest(
         searchRequest$,
-        { maxRetries: 3, initialDelayMs: 1000 }, // Example config
+        { maxRetries: 3, initialDelayMs: 1000 },
         `Find Folder by Name "${folderName}"`
     ).pipe(
       map(response => {
@@ -145,35 +165,29 @@ export class DriveFolderService {
           console.log(`Found folder "${folderName}" with ID: ${response.files[0].id}`);
           return response.files[0].id;
         } else {
-          console.log(`Folder "${folderName}" not found in parent "${parentFolderId}".`);
+          // console.log(`Folder "${folderName}" not found in parent "${parentFolderId}".`);
           return null;
         }
       }),
-      // Final catchError after retries
       catchError(error => {
         const formattedError = this.utils.formatHttpError(error);
         console.error(`Error finding folder "${folderName}" in parent "${parentFolderId}" (final after retries):`, formattedError);
         console.warn(`Search failed for folder "${folderName}", proceeding as if not found.`);
-        return of(null); // Return null to allow creation logic
+        return of(null);
       })
     );
   }
 
   /**
-   * Creates a new folder in Google Drive, optionally adding an ItemId HASH to appProperties.
-   * Includes retry logic.
-   *
-   * @param folderName The name for the new folder.
-   * @param parentFolderId The ID of the parent folder where the new folder should be created.
-   * @param accessToken A valid Google OAuth 2.0 access token.
-   * @param hashedItemId Optional HASHED ItemId to store in the folder's appProperties.
-   * @returns Observable emitting the ID of the newly created folder.
+   * Creates a new folder in Google Drive.
+   * Token is fetched internally.
    */
-  private createFolder(folderName: string, parentFolderId: string, accessToken: string, hashedItemId?: string): Observable<string> {
-    const headers = new HttpHeaders({
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json'
-    });
+  private createFolder(folderName: string, parentFolderId: string, hashedItemId?: string): Observable<string> {
+    const headers = this.createDriveApiHeaders('application/json'); // Explicit content type for POST
+    if (!headers) {
+      return throwError(() => new Error('[DriveFolderService] Authentication token missing for createFolder.'));
+    }
+
     const metadata: Partial<DriveFile> & {mimeType: string, parents: string[]} = {
       name: folderName,
       mimeType: 'application/vnd.google-apps.folder',
@@ -181,30 +195,23 @@ export class DriveFolderService {
     };
     if (hashedItemId) {
       metadata.appProperties = { [this.ITEM_ID_HASH_PROPERTY_KEY]: hashedItemId };
-      console.log(`Creating folder "${folderName}" in parent "${parentFolderId}" with ItemId HASH "${hashedItemId}"`);
-    } else {
-      console.log(`Creating folder "${folderName}" in parent "${parentFolderId}" (no ItemId HASH)`);
     }
     const params = new HttpParams().set('fields', 'id, name, appProperties');
 
-    // Define the request
     const createRequest$ = this.http.post<DriveFile>(this.DRIVE_API_URL, metadata, { headers, params });
 
-    // Wrap with retry logic
     return this.utils.retryRequest(
         createRequest$,
-        { maxRetries: 3, initialDelayMs: 1500 }, // Example config
+        { maxRetries: 3, initialDelayMs: 1500 },
         `Create Folder "${folderName}"`
     ).pipe(
       map(response => {
         console.log(`Created folder "${response.name}" with ID: ${response.id}` + (hashedItemId ? ` and ItemId HASH: ${response.appProperties?.[this.ITEM_ID_HASH_PROPERTY_KEY]}` : ''));
         return response.id;
       }),
-      // Final catchError after retries
       catchError(error => {
         const formattedError = this.utils.formatHttpError(error);
         console.error(`Error creating folder "${folderName}" in parent "${parentFolderId}" (final after retries):`, formattedError);
-        // Re-throw the error after logging, as folder creation failure might be critical
         return throwError(() => new Error(`Failed to create folder "${folderName}". ${formattedError}`));
       })
     );
@@ -212,176 +219,169 @@ export class DriveFolderService {
 
  /**
  * Finds or creates a folder, using HASHED ItemId if provided.
- * Includes retry logic inherited from called methods.
- * THIS METHOD IS NOW PUBLIC.
- *
- * @param folderName The name of the folder.
- * @param parentFolderId The ID of the parent folder.
- * @param accessToken A valid Google OAuth 2.0 access token.
- * @param itemId Optional ORIGINAL ItemId associated with this folder. Will be hashed if provided.
- * @returns Observable emitting the ID of the found or created folder.
+ * Implements caching for the find/create operation. Token is fetched by underlying methods.
  */
-  public findOrCreateFolder(folderName: string, parentFolderId: string, accessToken: string, itemId?: string): Observable<string> {
+  public findOrCreateFolder(folderName: string, parentFolderId: string, itemId?: string): Observable<string> {
+    // Token will be fetched by findFolderByHashedItemId, findFolderByName, or createFolder.
+    let cacheKeyPrefix = itemId ? 'itemHash' : 'name';
+
+    let operation$: Observable<string>;
+
     if (itemId) {
-      console.log(`Attempting to find or create folder "${folderName}" using ItemId "${itemId}" (will be hashed) in parent ${parentFolderId}`);
-      return from(this.utils.generateHash(itemId)).pipe(
-        catchError(hashError => {
-          console.error(`Error generating hash for itemId "${itemId}":`, hashError);
-          const errorMessage = hashError instanceof Error ? hashError.message : String(hashError);
-          return throwError(() => new Error(`Failed to generate identifier hash for ${itemId}. ${errorMessage}`));
-        }),
+      operation$ = from(this.utils.generateHash(itemId)).pipe(
+        tap(hashedItemId => console.log(`Generated hash for itemId "${itemId}" for folder "${folderName}": ${hashedItemId}`)),
         switchMap(hashedItemId => {
-          console.log(`Generated hash for itemId "${itemId}": ${hashedItemId}`);
-          return this.findFolderByHashedItemId(hashedItemId, accessToken).pipe(
+          const itemSpecificCacheKey = `${cacheKeyPrefix}_${parentFolderId}_${hashedItemId}`;
+          if (this.findOrCreateFolderCache.has(itemSpecificCacheKey)) {
+            return this.findOrCreateFolderCache.get(itemSpecificCacheKey)!;
+          }
+          const newOp$ = this.findFolderByHashedItemId(hashedItemId).pipe( // No accessToken
             switchMap(folderIdFromHash => {
               if (folderIdFromHash) {
-                console.log(`Using existing folder found by ItemId HASH "${hashedItemId}". ID: ${folderIdFromHash}`);
                 return of(folderIdFromHash);
               } else {
-                console.log(`Folder with ItemId HASH "${hashedItemId}" not found. Creating new folder "${folderName}" with this HASH.`);
-                return this.createFolder(folderName, parentFolderId, accessToken, hashedItemId);
+                return this.createFolder(folderName, parentFolderId, hashedItemId); // No accessToken
               }
+            }),
+            shareReplay(1),
+            catchError(err => {
+              this.findOrCreateFolderCache.delete(itemSpecificCacheKey);
+              console.error(`Error in findOrCreateFolder (hashed path) for key ${itemSpecificCacheKey}, folder "${folderName}":`, err.message || err);
+              return throwError(() => err);
             })
           );
+          this.findOrCreateFolderCache.set(itemSpecificCacheKey, newOp$);
+          return newOp$;
         }),
-        catchError(err => {
-          console.error(`Failed to find or create folder "${folderName}" associated with itemId "${itemId}" (final after retries):`, err.message || err);
-            return throwError(() => err);
+        catchError(hashError => {
+          console.error(`Error generating hash for itemId "${itemId}" (folder "${folderName}"):`, hashError);
+          const errorMessage = hashError instanceof Error ? hashError.message : String(hashError);
+          return throwError(() => new Error(`Failed to generate identifier hash for ${itemId} (folder "${folderName}"). ${errorMessage}`));
         })
       );
     } else {
-      console.log(`Attempting to find or create folder "${folderName}" by name in parent "${parentFolderId}" (no ItemId provided).`);
-      return this.findFolderByName(folderName, parentFolderId, accessToken).pipe(
+      const nameSpecificCacheKey = `${cacheKeyPrefix}_${parentFolderId}_${this.sanitizeFolderName(folderName)}`;
+      if (this.findOrCreateFolderCache.has(nameSpecificCacheKey)) {
+        return this.findOrCreateFolderCache.get(nameSpecificCacheKey)!;
+      }
+      operation$ = this.findFolderByName(folderName, parentFolderId).pipe( // No accessToken
         switchMap(folderIdFromName => {
           if (folderIdFromName) {
-            console.log(`Using existing folder found by name "${folderName}". ID: ${folderIdFromName}`);
             return of(folderIdFromName);
           } else {
-            console.log(`Folder with name "${folderName}" not found in parent "${parentFolderId}". Creating new folder.`);
-            return this.createFolder(folderName, parentFolderId, accessToken);
+            return this.createFolder(folderName, parentFolderId); // No accessToken
           }
         }),
+        shareReplay(1),
         catchError(err => {
-            console.error(`Failed to find or create folder "${folderName}" by name (final after retries):`, err.message || err);
-            return throwError(() => err);
+          this.findOrCreateFolderCache.delete(nameSpecificCacheKey);
+          console.error(`Error in findOrCreateFolder (name path) for key ${nameSpecificCacheKey}, folder "${folderName}":`, err.message || err);
+          return throwError(() => err);
         })
       );
+      this.findOrCreateFolderCache.set(nameSpecificCacheKey, operation$);
     }
+    return operation$;
 }
 
 
   /**
    * Gets the ID of the root "LMS Import" folder, creating it if necessary.
-   * Uses caching to avoid repeated lookups.
-   *
-   * @param accessToken A valid Google OAuth 2.0 access token.
-   * @returns Observable emitting the ID of the "LMS Import" folder.
+   * Token is fetched by underlying findOrCreateFolder.
    */
-  public getRootImportFolderId(accessToken: string): Observable<string> {
-    if (!this.rootImportFolderId$) {
-      this.rootImportFolderId$ = this.findOrCreateFolder(this.ROOT_IMPORT_FOLDER_NAME, 'root', accessToken /* no itemId */).pipe(
-        tap(id => console.log(`Root Import Folder ID (${this.ROOT_IMPORT_FOLDER_NAME}): ${id}`)),
-        shareReplay(1) // Cache the result
+  public getRootImportFolderId(): Observable<string> {
+    if (!this.rootImportFolderIdObservable$) {
+      this.rootImportFolderIdObservable$ = this.findOrCreateFolder(
+        this.ROOT_IMPORT_FOLDER_NAME,
+        'root' // No itemId
+      ).pipe(
+        tap(id => console.log(`Root Import Folder ID ("${this.ROOT_IMPORT_FOLDER_NAME}") obtained: ${id}`)),
+        shareReplay(1)
       );
     }
-    return this.rootImportFolderId$;
+    return this.rootImportFolderIdObservable$;
   }
 
   /**
    * Gets the ID of the Course Folder within the root import folder.
-   *
-   * @param courseName The name for the course folder.
-   * @param accessToken A valid Google OAuth 2.0 access token.
-   * @returns Observable emitting the ID of the course folder.
+   * Token is fetched by underlying methods.
    */
-  public getCourseFolderId(courseName: string, accessToken: string): Observable<string> {
+  public getCourseFolderId(courseName: string): Observable<string> {
     const sanitizedCourseName = this.sanitizeFolderName(courseName);
-    return this.getRootImportFolderId(accessToken).pipe(
+    return this.getRootImportFolderId().pipe( // No accessToken
       switchMap(rootImportFolderId =>
-        this.findOrCreateFolder(sanitizedCourseName, rootImportFolderId, accessToken /* no itemId */)
-      )
+        this.findOrCreateFolder(sanitizedCourseName, rootImportFolderId /* no itemId */) // No accessToken
+      ),
+      tap(id => console.log(`Course Folder ID ("${sanitizedCourseName}"): ${id}`))
     );
   }
 
   /**
    * Gets the ID of the Topic Folder within a specific course folder.
-   *
-   * @param topicName The name for the topic folder.
-   * @param courseFolderId The ID of the parent course folder.
-   * @param accessToken A valid Google OAuth 2.0 access token.
-   * @returns Observable emitting the ID of the topic folder.
+   * Token is fetched by underlying findOrCreateFolder.
    */
-  public getTopicFolderId(topicName: string, courseFolderId: string, accessToken: string): Observable<string> {
+  public getTopicFolderId(topicName: string, courseFolderId: string): Observable<string> {
     const sanitizedTopicName = this.sanitizeFolderName(topicName);
-    return this.findOrCreateFolder(sanitizedTopicName, courseFolderId, accessToken /* no itemId */);
+    return this.findOrCreateFolder(sanitizedTopicName, courseFolderId /* no itemId */).pipe( // No accessToken
+        tap(id => console.log(`Topic Folder ID ("${sanitizedTopicName}") in course ${courseFolderId}: ${id}`))
+    );
   }
 
   /**
    * Gets the ID of the Assignment Folder within a specific topic folder.
-   * Uses HASHED ItemId for searching and creation.
-   *
-   * @param assignmentName The name for the assignment folder.
-   * @param topicFolderId The ID of the parent topic folder.
-   * @param accessToken A valid Google OAuth 2.0 access token.
-   * @param itemId The specific ORIGINAL ItemId associated with this assignment (will be hashed).
-   * @returns Observable emitting the ID of the assignment folder.
+   * Token is fetched by underlying findOrCreateFolder.
    */
-  public getAssignmentFolderId(assignmentName: string, topicFolderId: string, accessToken: string, itemId: string): Observable<string> {
+  public getAssignmentFolderId(assignmentName: string, topicFolderId: string, itemId: string): Observable<string> {
     const sanitizedAssignmentName = this.sanitizeFolderName(assignmentName);
-    return this.findOrCreateFolder(sanitizedAssignmentName, topicFolderId, accessToken, itemId);
+    return this.findOrCreateFolder(sanitizedAssignmentName, topicFolderId, itemId).pipe( // No accessToken
+        tap(id => console.log(`Assignment Folder ID ("${sanitizedAssignmentName}", itemId: ${itemId}) in topic ${topicFolderId}: ${id}`))
+    );
   }
 
   /**
    * Orchestrates the creation/retrieval of the full folder path for an assignment item.
-   * Root -> LMS Import -> Course -> Topic -> Assignment (identified by HASHED ItemId)
-   * Includes retry logic inherited from called methods.
-   *
-   * @param courseName Name of the course.
-   * @param topicName Name of the topic.
-   * @param assignmentName Name of the assignment.
-   * @param itemId The ORIGINAL ItemId, used to identify/create the assignment folder via its hash.
-   * @param accessToken A valid Google OAuth 2.0 access token.
-   * @returns Observable emitting the ID of the final assignment folder.
+   * Token is fetched by underlying methods.
    */
   public ensureAssignmentFolderStructure(
     courseName: string,
     topicName: string,
     assignmentName: string,
-    itemId: string,
-    accessToken: string
+    itemId: string
   ): Observable<string> {
     if (!courseName || !topicName || !assignmentName) {
-      return throwError(() => new Error('Course, Topic, and Assignment names are required.'));
+      return throwError(() => new Error('Course, Topic, and Assignment names are required for folder structure.'));
     }
     if (!itemId) {
-        return throwError(() => new Error('An ItemId is required to ensure the assignment folder structure.'));
+      return throwError(() => new Error('An ItemId is required to ensure the assignment folder structure (for unique identification).'));
     }
+    console.log(`Ensuring folder structure for: Course="${courseName}", Topic="${topicName}", Assignment="${assignmentName}" (ItemId: ${itemId})`);
 
-    return this.getCourseFolderId(courseName, accessToken).pipe(
-      switchMap(courseFolderId => this.getTopicFolderId(topicName, courseFolderId, accessToken)),
-      switchMap(topicFolderId => this.getAssignmentFolderId(assignmentName, topicFolderId, accessToken, itemId)),
-      tap(assignmentFolderId => console.log(`Ensured folder structure complete. Assignment Folder ID: ${assignmentFolderId} (associated with ItemId: ${itemId}, stored as hash)`)),
+    return this.getCourseFolderId(courseName).pipe( // No accessToken
+      switchMap(courseFolderId => this.getTopicFolderId(topicName, courseFolderId)), // No accessToken
+      switchMap(topicFolderId => this.getAssignmentFolderId(assignmentName, topicFolderId, itemId)), // No accessToken
+      tap(assignmentFolderId => console.log(`Successfully ensured folder structure. Final Assignment Folder ID: ${assignmentFolderId} (for ItemId: ${itemId})`)),
       catchError(err => {
-          console.error(`Failed to ensure folder structure for assignment "${assignmentName}" (itemId: ${itemId}):`, err.message || err);
-        return throwError(() => new Error(`Could not ensure folder structure for assignment "${assignmentName}". ${err.message || String(err)}`));
+        const baseMessage = `Failed to ensure folder structure for assignment "${assignmentName}" (itemId: ${itemId})`;
+        console.error(`${baseMessage}:`, err.message || err);
+        const detailedError = err instanceof Error ? err.message : String(err);
+        return throwError(() => new Error(`${baseMessage}. Error: ${detailedError}`));
       })
     );
   }
 
-
   /**
-   * Helper function to sanitize folder names (basic example).
+   * Helper function to sanitize folder names.
    */
   private sanitizeFolderName(name: string): string {
     if (!name) return 'Untitled';
-    return name.replace(/[\\/]/g, '-').trim() || 'Untitled';
+    return name.replace(/[\\/]/g, '_').replace(/:/g, '-').trim() || 'Untitled';
   }
 
    /**
    * Helper function to escape single quotes and backslashes for Drive API query parameters.
    */
   private escapeQueryParam(value: string): string {
+    if (!value) return '';
     return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-   }
-
+  }
 }
