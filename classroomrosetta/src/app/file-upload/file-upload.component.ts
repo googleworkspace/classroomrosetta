@@ -28,7 +28,7 @@ import {ClassroomService} from '../services/classroom/classroom.service';
 import {ConverterService} from '../services/converter/converter.service';
 import {DriveFolderService} from '../services/drive/drive.service';
 import {HtmlToDocsService} from '../services/html-to-docs/html-to-docs.service';
-import {FileUploadService as ActualFileUploadService} from '../services/file-upload/file-upload.service'; // Correct alias
+import {FileUploadService as ActualFileUploadService} from '../services/file-upload/file-upload.service';
 import {QtiToFormsService} from '../services/qti-to-forms/qti-to-forms.service';
 import {UtilitiesService} from '../services/utilities/utilities.service';
 import {AuthService} from '../services/auth/auth.service';
@@ -97,7 +97,7 @@ export class FileUploadComponent {
   converter = inject(ConverterService);
   drive = inject(DriveFolderService);
   docs = inject(HtmlToDocsService);
-  files = inject(ActualFileUploadService); // Use correct alias
+  files = inject(ActualFileUploadService);
   qti = inject(QtiToFormsService);
   auth = inject(AuthService);
   util = inject(UtilitiesService);
@@ -243,13 +243,11 @@ export class FileUploadComponent {
 
     console.log('[Orchestrator] Starting process with selected content:', selectedContent);
 
-    // Initial token check: Ensure user is authenticated before starting the workflow.
-    // The actual tokens for API calls will be fetched by individual services just-in-time.
     const initialTokenCheck = this.auth.getGoogleAccessToken();
     if (!initialTokenCheck) {
       this.errorMessage = "Processing aborted: User not authenticated. Please log in.";
       console.error(this.errorMessage);
-      this.isProcessing = false; // Ensure isProcessing is reset
+      this.isProcessing = false;
       this.loadingMessage = '';
       this.changeDetectorRef.markForCheck();
       return;
@@ -431,7 +429,6 @@ export class FileUploadComponent {
   processAssignmentsAndCreateContent(
     courseName: string,
     itemsToProcess: ProcessedCourseWork[],
-    // accessToken: string, // Removed accessToken parameter
     allPackageImsccFiles: ImsccFile[]
   ): Observable<ProcessingResult[]> {
     console.log(`[Orchestrator] processAssignmentsAndCreateContent: Starting content preparation for ${itemsToProcess.length} items.`);
@@ -470,11 +467,10 @@ export class FileUploadComponent {
           } as ProcessingResult);
         }
 
-        // Services will fetch their own tokens. No need to pass 'accessToken' anymore.
         return this.drive.ensureAssignmentFolderStructure(courseName, driveTopicFolderName, assignmentName, itemId).pipe(
           switchMap(assignmentFolderId => {
             const uploadedFiles$: Observable<DriveFile[]> = (filesToUploadForDriveService.length > 0 ?
-              this.files.uploadLocalFiles(filesToUploadForDriveService, assignmentFolderId) : // No accessToken
+              this.files.uploadLocalFiles(filesToUploadForDriveService, assignmentFolderId) :
               of([])
             ).pipe(
               tap(uploaded => console.log(`${itemLogPrefix} ${uploaded.length} local files uploaded.`)),
@@ -489,7 +485,7 @@ export class FileUploadComponent {
             let currentHtmlContent = htmlDescriptionForProcessing;
 
             if (qtiFileForService) {
-              primaryContentCreation$ = this.qti.createFormFromQti(qtiFileForService, allPackageImsccFiles, assignmentName, itemId, assignmentFolderId) // No accessToken
+              primaryContentCreation$ = this.qti.createFormFromQti(qtiFileForService, allPackageImsccFiles, assignmentName, itemId, assignmentFolderId)
                 .pipe(
                   tap(form => console.log(`${itemLogPrefix} QTI Form created/found.`)),
                   catchError(qtiErr => throwError(() => ({message: `QTI to Form failed: ${qtiErr.message}`, stage: 'QTI Processing', details: qtiErr, itemId})))

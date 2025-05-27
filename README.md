@@ -64,7 +64,7 @@ npm install
 firebase init
 ```
 
-6. Configure the .env file
+6. Configure the .env file and replace as much as is available.
 ```
 PROJECT_NAME=<Project name>
 GCLOUD_PROJECT_ID=<Project name>
@@ -81,6 +81,13 @@ APPS_SCRIPT_EXECUTION_API_URL=<Deployed Apps Script API URL>
 ```
 
 7. Deploy using the Gulp Command
+```
+gulp fullSetupAndDeploy
+```
+
+8. Deploy the Apps Script file as an API. The project will need the OAuth consent screent completed for internal use and the project number associated in the settings. Replace the APPS_SCRIPT_EXECUTION_API_URL with the API url.
+
+9. Run the Gulp deployment again.
 ```
 gulp fullSetupAndDeploy
 ```
