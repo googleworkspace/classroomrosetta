@@ -18,9 +18,9 @@ import {Injectable, inject} from '@angular/core';
 import {HttpClient, HttpHeaders, HttpParams, HttpErrorResponse} from '@angular/common/http';
 import {Observable, throwError, of, from} from 'rxjs';
 import {switchMap, catchError, tap} from 'rxjs/operators';
-import {DriveFile} from '../../interfaces/classroom-interface'; // Assuming path is correct
-import {UtilitiesService, RetryConfig} from '../utilities/utilities.service'; // Assuming path is correct
-import {AuthService} from '../auth/auth.service'; // Import AuthService
+import {DriveFile} from '../../interfaces/classroom-interface';
+import {UtilitiesService, RetryConfig} from '../utilities/utilities.service';
+import {AuthService} from '../auth/auth.service';
 
 @Injectable({
   providedIn: 'root'
@@ -30,7 +30,7 @@ export class HtmlToDocsService {
   // Inject dependencies
   private http = inject(HttpClient);
   private utils = inject(UtilitiesService);
-  private auth = inject(AuthService); // Inject AuthService
+  private auth = inject(AuthService);
 
   // Custom property key to store the source identifier HASH
   private readonly APP_PROPERTY_KEY = 'imsccIdentifier';
@@ -57,9 +57,9 @@ export class HtmlToDocsService {
     // For GET, 'Accept: application/json' is good practice but often default.
     // This service primarily does GET for search and POST FormData for upload.
     if (!isUpload) { // For GET search or if we were doing a JSON POST
-      // headersConfig['Accept'] = 'application/json'; // Good practice for GET
+      headersConfig['Accept'] = 'application/json'; // Good practice for GET
       // If creating doc via metadata-only POST (not the case here), would add:
-      // headersConfig['Content-Type'] = 'application/json';
+      headersConfig['Content-Type'] = 'application/json';
     }
 
     return new HttpHeaders(headersConfig);
@@ -86,7 +86,6 @@ export class HtmlToDocsService {
     // --- Input Validation ---
     if (!itemId) return throwError(() => new Error('[HtmlToDocsService] Item ID (itemId) is required (will be hashed).'));
     if (!documentTitle) return throwError(() => new Error('[HtmlToDocsService] Document title cannot be empty (required for creation).'));
-    // Token will be checked before each API call.
 
     // Define retry configuration
     const retryConfig: RetryConfig = {maxRetries: 3, initialDelayMs: 2000};
@@ -158,11 +157,7 @@ export class HtmlToDocsService {
               formData.append('metadata', metadataBlob);
               formData.append('file', htmlBlob, `${documentTitle}.html`); // Provide a filename for the HTML part
 
-              // Ensure the upload endpoint is used correctly for conversion
-              // The DRIVE_API_UPLOAD_ENDPOINT should be like: 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart'
-              // We need to add 'fields' to get back the desired DriveFile properties.
               const uploadUrlWithFields = `${this.utils.DRIVE_API_UPLOAD_ENDPOINT}${this.utils.DRIVE_API_UPLOAD_ENDPOINT.includes('?') ? '&' : '?'}fields=${encodeURIComponent('id,name,mimeType,appProperties,webViewLink,parents')}`;
-
 
               const createRequest$ = this.http.post<DriveFile>(
                 uploadUrlWithFields, // Use the upload endpoint

@@ -18,14 +18,14 @@ import {Injectable, inject} from '@angular/core';
 import {HttpClient, HttpHeaders, HttpParams, HttpErrorResponse} from '@angular/common/http';
 import {Observable, throwError, of, from} from 'rxjs';
 import {switchMap, catchError, map, tap, mergeMap} from 'rxjs/operators';
-import {ImsccFile, DriveFile, Material} from '../../interfaces/classroom-interface'; // Assuming path is correct
+import {ImsccFile, DriveFile, Material} from '../../interfaces/classroom-interface';
 import {
   GoogleForm, FormInfo, FormItem, QuestionItem, Question, Option,
   BatchUpdateFormRequest, FormRequest, BatchUpdateFormResponse, Image as FormsImage,
-} from '../../interfaces/forms-interface'; // Assuming path is correct
-import {UtilitiesService, RetryConfig} from '../utilities/utilities.service'; // Assuming path is correct
-import {FileUploadService} from '../file-upload/file-upload.service'; // Assuming path is correct
-import {AuthService} from '../auth/auth.service'; // Import AuthService
+} from '../../interfaces/forms-interface';
+import {UtilitiesService, RetryConfig} from '../utilities/utilities.service';
+import {FileUploadService} from '../file-upload/file-upload.service';
+import {AuthService} from '../auth/auth.service';
 import {decode} from 'html-entities';
 import {environment} from '../../../environments/environment';
 
@@ -98,7 +98,7 @@ export class QtiToFormsService {
   private http = inject(HttpClient);
   private utils = inject(UtilitiesService);
   private fileUploadService = inject(FileUploadService);
-  private auth = inject(AuthService); // Inject AuthService
+  private auth = inject(AuthService);
   private readonly APP_PROPERTY_KEY = 'imsccIdentifier';
 
   private readonly APPS_SCRIPT_RUN_ENDPOINT = environment.formsItemsApi;
@@ -153,7 +153,7 @@ export class QtiToFormsService {
     qtiFile: ImsccFile,
     allPackageFiles: ImsccFile[],
     formTitle: string,
-    itemId: string, // No longer takes accessToken
+    itemId: string,
     parentFolderId: string
   ): Observable<Material | null> {
     if (!qtiFile?.data || typeof qtiFile.data !== 'string') return throwError(() => new Error('[QTI Service] QTI file data is missing or not a string.'));
@@ -165,7 +165,6 @@ export class QtiToFormsService {
 
     console.log(`[QTI Service] Starting QTI to Form conversion for item: ${itemId}, title: "${formTitle}"`);
 
-    // Headers will be created just-in-time by helper for each API call.
     const retryConfig: RetryConfig = {maxRetries: 3, initialDelayMs: 2000};
 
     return from(this.utils.generateHash(itemId)).pipe(
@@ -174,7 +173,7 @@ export class QtiToFormsService {
         return throwError(() => new Error(`[QTI Service] Failed to generate identifier hash. ${hashError.message || hashError}`));
       }),
       switchMap(hashedItemId => {
-        const driveApiHeaders = this.createApiHeaders(); // For Drive search
+        const driveApiHeaders = this.createApiHeaders();
         if (!driveApiHeaders) {
           return throwError(() => new Error('[QTI Service] Authentication token missing for Drive search.'));
         }
@@ -205,7 +204,6 @@ export class QtiToFormsService {
                 return throwError(() => new Error(`[QTI Service] QTI parsing failed: ${errorMessage}`));
               }
 
-              // _uploadImagesAndBuildFormRequests will handle its own token for FileUploadService
               return this._uploadImagesAndBuildFormRequests(intermediateItems, parentFolderId).pipe(
                 switchMap(qtiRequests => {
                   if (qtiRequests.length === 0 && intermediateItems.length > 0) {
@@ -253,11 +251,10 @@ export class QtiToFormsService {
                       const appsScriptRunPayload: AppsScriptRunRequest = {
                         function: "createFormItemsInGoogleForm",
                         parameters: [createdForm.formId, qtiRequests],
-                        devMode: false // Set to true for testing with latest Apps Script code if needed
+                        devMode: false
                       };
 
                       console.log('[QTI Service] Calling Apps Script API to add items. Endpoint:', this.APPS_SCRIPT_RUN_ENDPOINT);
-                      // console.debug('[QTI Service] Apps Script Payload:', JSON.stringify(appsScriptRunPayload, null, 2)); // Verbose
 
                       const addItemsViaAppsScript$ = this.http.post<AppsScriptRunResponse>(
                         this.APPS_SCRIPT_RUN_ENDPOINT,
@@ -267,7 +264,7 @@ export class QtiToFormsService {
 
                       return this.utils.retryRequest(addItemsViaAppsScript$, retryConfig, `Add Items to Form ${createdForm.formId} via Apps Script`).pipe(
                         map(appsScriptRunResponse => {
-                          // console.log(`[QTI Service] Apps Script API raw response for form ${createdForm.formId}:`, JSON.stringify(appsScriptRunResponse, null, 2)); // Verbose
+
                           if (appsScriptRunResponse.error) {
                             console.error(`[QTI Service] Apps Script execution error for form ${createdForm.formId}:`, appsScriptRunResponse.error);
                             throw new Error(`Apps Script execution failed: ${appsScriptRunResponse.error.message || 'Unknown Apps Script error'}`);
@@ -277,7 +274,7 @@ export class QtiToFormsService {
                             console.log(`[QTI Service] Apps Script function result for form ${createdForm.formId}: Success=${result.success}, Msg=${result.message}, Created=${result.createdItems}`);
                             if (!result.success) {
                               console.warn(`[QTI Service] Apps Script function reported failure for form ${createdForm.formId}: ${result.message}`, result.errors);
-                              // Potentially throw an error here if partial success is not acceptable
+
                             }
                           } else {
                             console.warn(`[QTI Service] Apps Script response for form ${createdForm.formId} did not contain expected result structure.`);
@@ -291,19 +288,19 @@ export class QtiToFormsService {
                       );
                     }),
                     mergeMap(finalForm => {
-                      if (!finalForm?.formId) return of(null); // Should have been caught earlier
+                      if (!finalForm?.formId) return of(null);
                       const formId = finalForm.formId;
 
                       const driveApiHeadersForUpdate = this.createApiHeaders('application/json');
                       if (!driveApiHeadersForUpdate) {
                         console.warn(`[QTI Service] Token missing for Drive properties update for Form ${formId}. Skipping update.`);
-                        // Return the form material without Drive properties updated if token fails here.
+
                         return of({form: {formUrl: finalForm.responderUri || `https://docs.google.com/forms/d/${formId}/viewform`, title: finalForm.info?.title || formTitle}} as Material);
                       }
 
                       const driveUpdateUrl = `${this.utils.DRIVE_API_FILES_ENDPOINT}/${formId}`;
                       const driveUpdateBody = {appProperties: {[this.APP_PROPERTY_KEY]: hashedItemId}};
-                      // Moving from 'root' to parentFolderId. If it's already in parentFolderId, this might be redundant but generally safe.
+
                       const driveUpdateParams = new HttpParams().set('addParents', parentFolderId).set('removeParents', 'root');
                       const driveUpdateRequest$ = this.http.patch<DriveFile>(driveUpdateUrl, driveUpdateBody, {headers: driveApiHeadersForUpdate, params: driveUpdateParams});
 
@@ -311,7 +308,7 @@ export class QtiToFormsService {
                         map(driveFile => ({form: {formUrl: finalForm.responderUri || `https://docs.google.com/forms/d/${formId}/viewform`, title: driveFile.name || finalForm.info?.title || formTitle}} as Material)),
                         catchError(driveErr => {
                           console.error(`[QTI Service] Error updating Drive properties for Form ${formId}: ${this.utils.formatHttpError(driveErr)}`);
-                          // Return the form material even if Drive properties update fails, as the form itself exists.
+
                           return of({form: {formUrl: finalForm.responderUri || `https://docs.google.com/forms/d/${formId}/viewform`, title: finalForm.info?.title || formTitle}} as Material);
                         })
                       );
@@ -327,7 +324,7 @@ export class QtiToFormsService {
           }),
           catchError(err => {
             console.error(`[QTI Service] Error searching for existing Form for ${hashedItemId}: ${this.utils.formatHttpError(err)}`);
-            return of(null); // If search fails, treat as form not found and proceed to create (or return null if that's desired behavior for search failure)
+            return of(null);
           })
         );
       })
@@ -336,7 +333,6 @@ export class QtiToFormsService {
 
   private _uploadImagesAndBuildFormRequests(
     intermediateItems: IntermediateFormItemDefinition[],
-    // accessToken: string, // Removed accessToken parameter
     parentFolderIdForImages: string,
   ): Observable<FormRequest[]> {
     if (intermediateItems.length === 0) {
@@ -345,7 +341,6 @@ export class QtiToFormsService {
 
     const itemsThatNeedImageUpload = intermediateItems.filter(item => !!item.imageFileToUpload);
     if (itemsThatNeedImageUpload.length === 0) {
-      // No images to upload, directly build requests
       return of(this._buildFormRequestsFromIntermediate(intermediateItems, new Map()));
     }
 
@@ -356,7 +351,6 @@ export class QtiToFormsService {
 
     console.log(`[QTI Service] Attempting to upload ${filesToBatchUpload.length} images to Drive folder ${parentFolderIdForImages}.`);
 
-    // FileUploadService.uploadLocalFiles now fetches its own token
     return this.fileUploadService.uploadLocalFiles(filesToBatchUpload, parentFolderIdForImages).pipe(
       map(uploadedDriveFiles => {
         console.log(`[QTI Service] Successfully processed ${uploadedDriveFiles.length} of ${filesToBatchUpload.length} image uploads (some may have been found existing).`);
@@ -386,13 +380,9 @@ export class QtiToFormsService {
     );
   }
 
-  // _buildFormRequestsFromIntermediate, _parseQtiToIntermediateItems, parseStandardQtiItems,
-  // parseResponseProcessing, getTextContent, _resolveImagePath remain the same internally
-  // as they don't make direct HTTP calls needing tokens.
-
   private _buildFormRequestsFromIntermediate(
     intermediateItems: IntermediateFormItemDefinition[],
-    driveFileMap: Map<string, DriveFile> // Maps original ImsccFile.name to DriveFile
+    driveFileMap: Map<string, DriveFile>
   ): FormRequest[] {
     const formRequests: FormRequest[] = [];
     intermediateItems.forEach(itemDef => {
@@ -403,7 +393,7 @@ export class QtiToFormsService {
         // Use the original image file name (from IMSCC) to look up in the map
         const driveFile = driveFileMap.get(itemDef.imageFileToUpload.name);
         let driveImageUri: string | null = null;
-        let altTextForImageObject = "Image"; // Default alt text
+        let altTextForImageObject = "Image";
 
         // Determine alt text for the FormsImage object
         if (itemDef.imageAltText && !this.isLikelyFilename(itemDef.imageAltText)) {
@@ -414,19 +404,11 @@ export class QtiToFormsService {
 
 
         if (driveFile) {
-          // console.log(`[QTI Service] Processing DriveFile for image "${itemDef.imageFileToUpload.name}": ID=${driveFile.id}, Name=${driveFile.name}`);
-          // Prefer direct link if available, otherwise construct one.
-          // Note: Google Forms might be picky about direct image URLs. Publicly accessible URLs are best.
-          // A direct download link like 'uc?id=...' might work if the image is public or accessible to the Form.
-          // Thumbnail links are often smaller and might be better for performance if quality is acceptable.
-          if (driveFile.thumbnailLink) { // Check if thumbnailLink is a valid, usable URL
-             driveImageUri = driveFile.thumbnailLink.replace(/=s\d+$/, ''); // Remove size parameter for potentially larger image
-             // console.log(`[QTI Service] Using thumbnailLink (cleaned) for ${driveFile.name}: ${driveImageUri}`);
-          } else if (driveFile.id) { // Fallback to constructing a download link
-            // This link forces a download, might not be ideal for direct embedding in Forms if it doesn't resolve to an image preview.
-            // A webViewLink might be better if it leads to a viewable image, but often it's an HTML page.
-            // The direct /uc?id= link is often used for direct image access if permissions allow.
-            driveImageUri = `https://drive.google.com/uc?id=${driveFile.id}`; // Simpler UC link
+
+          if (driveFile.thumbnailLink) {
+            driveImageUri = driveFile.thumbnailLink.replace(/=s\d+$/, '');
+          } else if (driveFile.id) {
+            driveImageUri = `https://drive.google.com/uc?id=${driveFile.id}`;
             console.log(`[QTI Service] ThumbnailLink missing for ${driveFile.name}. Using constructed 'uc?id=' link: ${driveImageUri}. Ensure file is publicly viewable or accessible by Forms.`);
           } else {
             console.warn(`[QTI Service] DriveFile for "${itemDef.imageFileToUpload.name}" is missing both thumbnailLink and ID. Cannot generate image URI.`);
@@ -451,7 +433,7 @@ export class QtiToFormsService {
       if (itemDef.type === 'question' && itemDef.question) {
         const questionItem: QuestionItem = {question: itemDef.question};
         if (imageForForm) {
-          questionItem.image = imageForForm; // Add image to the question item
+          questionItem.image = imageForForm;
         }
         formItem = {title: itemDef.title, description: itemDef.description, questionItem: questionItem};
       } else if (itemDef.type === 'image_standalone') {
@@ -463,7 +445,7 @@ export class QtiToFormsService {
           standaloneImageTitle = "Image"; // Default title for standalone image
         }
 
-        if (imageForForm) { // Only create item if image was successfully processed
+        if (imageForForm) {
           formItem = {
             title: standaloneImageTitle, // Use the determined title
             description: (itemDef.description && !this.isLikelyFilename(itemDef.description)) ? itemDef.description : undefined,
@@ -479,7 +461,6 @@ export class QtiToFormsService {
       } else if (itemDef.sectionHeaderItem) {
         formItem = {title: itemDef.title, description: itemDef.description, sectionHeaderItem: itemDef.sectionHeaderItem};
       }
-      // Add other item types (gridItem etc.) if needed
 
       if (formItem) {
         formRequests.push({createItem: {item: formItem, location: {index: formRequests.length}}});
@@ -499,17 +480,16 @@ export class QtiToFormsService {
     // console.log(`[QTI HTML Parser] Parsing QTI from "${qtiFilePath}"...`);
     const itemElement = qtiDoc.querySelector('item, assessmentItem'); // Top-level item
     if (!itemElement) {
-        // console.warn(`[QTI Service] No <item> or <assessmentItem> found in "${qtiFilePath}". Trying to parse individual itemBody elements if any.`);
-        // Fallback for QTI files that might just be a list of itemBody elements without a main <item>
-        const itemBodies = Array.from(qtiDoc.querySelectorAll('itemBody'));
-        if (itemBodies.length > 0) {
-            itemBodies.forEach((bodyEl, idx) => {
-                const itemsFromFragment = this.parseHtmlContentWithinQti(bodyEl, qtiFilePath, allPackageFiles, `fragment_${idx}`);
-                intermediateItems.push(...itemsFromFragment);
-            });
-            return intermediateItems;
-        }
-        return intermediateItems; // Still empty if no item/assessmentItem and no itemBody
+
+      const itemBodies = Array.from(qtiDoc.querySelectorAll('itemBody'));
+      if (itemBodies.length > 0) {
+        itemBodies.forEach((bodyEl, idx) => {
+          const itemsFromFragment = this.parseHtmlContentWithinQti(bodyEl, qtiFilePath, allPackageFiles, `fragment_${idx}`);
+          intermediateItems.push(...itemsFromFragment);
+        });
+        return intermediateItems;
+      }
+      return intermediateItems;
     }
 
 
@@ -518,9 +498,7 @@ export class QtiToFormsService {
     if (mattextElement && mattextElement.textContent) {
       const itemsFromHtml = this.parseHtmlContentWithinQti(mattextElement, qtiFilePath, allPackageFiles, itemElement.getAttribute('ident') || itemElement.getAttribute('identifier') || 'html_qti_item');
       intermediateItems.push(...itemsFromHtml);
-      // If HTML parsing yields items, we might assume it's the primary content.
-      // However, check if there are also standard QTI interactions outside this HTML block.
-      // This is a complex case; for now, prioritize HTML if it yields content.
+
       if (intermediateItems.length > 0) {
         return intermediateItems;
       }
@@ -546,74 +524,74 @@ export class QtiToFormsService {
     const parser = new DOMParser();
     const htmlDoc = parser.parseFromString(htmlContent, 'text/html');
     const bodyChildren = Array.from(htmlDoc.body.children);
-    let questionCounter = 0; // Counter for questions derived from this HTML block
+    let questionCounter = 0;
 
     bodyChildren.forEach((element: Element, elIdx: number) => {
-        const currentIdentifier = `${baseIdentifier}_html_${elIdx}`;
-        if (element.tagName.toLowerCase() === 'img') { // Top-level image
-            const imgSrc = element.getAttribute('src');
-            const rawAltText = element.getAttribute('alt');
+      const currentIdentifier = `${baseIdentifier}_html_${elIdx}`;
+      if (element.tagName.toLowerCase() === 'img') {
+        const imgSrc = element.getAttribute('src');
+        const rawAltText = element.getAttribute('alt');
+        let imageFileToUpload: ImsccFile | undefined;
+        if (imgSrc) {
+          const imagePath = this._resolveImagePath(imgSrc, qtiFilePath);
+          if (imagePath) imageFileToUpload = allPackageFiles.find(f => f.name.toLowerCase() === imagePath.toLowerCase());
+        }
+        intermediateItems.push({
+          type: 'image_standalone',
+          title: (rawAltText && !this.isLikelyFilename(rawAltText)) ? rawAltText : "Image",
+          imageFileToUpload: imageFileToUpload,
+          originalImgSrc: imgSrc || undefined,
+          imageAltText: rawAltText || (imageFileToUpload ? imageFileToUpload.name : '')
+        });
+      } else if (element.tagName.toLowerCase() === 'p' || element.tagName.toLowerCase() === 'div' || element.tagName.toLowerCase() === 'span' || element.tagName.toLowerCase() === 'table' || element.tagName.toLowerCase() === 'ul' || element.tagName.toLowerCase() === 'ol') {
+        const imagesInElement = Array.from(element.querySelectorAll('img'));
+        const textContentFromParent = this.getTextContent(element, true).trim();
+
+        if (imagesInElement.length > 0) {
+          imagesInElement.forEach((imgElement, imgIdx) => {
+            questionCounter++;
+            const imgSrc = imgElement.getAttribute('src');
+            const rawAltText = imgElement.getAttribute('alt');
             let imageFileToUpload: ImsccFile | undefined;
             if (imgSrc) {
-                const imagePath = this._resolveImagePath(imgSrc, qtiFilePath);
-                if (imagePath) imageFileToUpload = allPackageFiles.find(f => f.name.toLowerCase() === imagePath.toLowerCase());
+              const imagePath = this._resolveImagePath(imgSrc, qtiFilePath);
+              if (imagePath) imageFileToUpload = allPackageFiles.find(f => f.name.toLowerCase() === imagePath.toLowerCase());
             }
+
+            let titleForIntermediateItem = textContentFromParent || // Use surrounding text if available
+              (rawAltText && !this.isLikelyFilename(rawAltText) ? rawAltText : `Image Question ${questionCounter}`);
+            if (this.isLikelyFilename(titleForIntermediateItem)) titleForIntermediateItem = `Image Question ${questionCounter}`;
+
+            let descriptionForIntermediateItem = "";
+            if (rawAltText && !this.isLikelyFilename(rawAltText) && rawAltText !== titleForIntermediateItem) {
+              descriptionForIntermediateItem = rawAltText;
+            }
+
             intermediateItems.push({
-                type: 'image_standalone',
-                title: (rawAltText && !this.isLikelyFilename(rawAltText)) ? rawAltText : "Image",
-                imageFileToUpload: imageFileToUpload,
-                originalImgSrc: imgSrc || undefined,
-                imageAltText: rawAltText || (imageFileToUpload ? imageFileToUpload.name : '')
+              type: 'question', // Assume image implies a question if not standalone
+              title: titleForIntermediateItem,
+              description: descriptionForIntermediateItem,
+              question: {textQuestion: {paragraph: false}}, // Default to short answer for image questions from HTML
+              imageFileToUpload: imageFileToUpload,
+              originalImgSrc: imgSrc || undefined,
+              imageAltText: rawAltText || (imageFileToUpload ? imageFileToUpload.name : '')
             });
-        } else if (element.tagName.toLowerCase() === 'p' || element.tagName.toLowerCase() === 'div' || element.tagName.toLowerCase() === 'span' || element.tagName.toLowerCase() === 'table' || element.tagName.toLowerCase() === 'ul' || element.tagName.toLowerCase() === 'ol') {
-            const imagesInElement = Array.from(element.querySelectorAll('img'));
-            const textContentFromParent = this.getTextContent(element, true).trim(); // Exclude alt text of descendant images
-
-            if (imagesInElement.length > 0) {
-                imagesInElement.forEach((imgElement, imgIdx) => {
-                    questionCounter++;
-                    const imgSrc = imgElement.getAttribute('src');
-                    const rawAltText = imgElement.getAttribute('alt');
-                    let imageFileToUpload: ImsccFile | undefined;
-                    if (imgSrc) {
-                        const imagePath = this._resolveImagePath(imgSrc, qtiFilePath);
-                        if (imagePath) imageFileToUpload = allPackageFiles.find(f => f.name.toLowerCase() === imagePath.toLowerCase());
-                    }
-
-                    let titleForIntermediateItem = textContentFromParent || // Use surrounding text if available
-                        (rawAltText && !this.isLikelyFilename(rawAltText) ? rawAltText : `Image Question ${questionCounter}`);
-                    if (this.isLikelyFilename(titleForIntermediateItem)) titleForIntermediateItem = `Image Question ${questionCounter}`;
-
-                    let descriptionForIntermediateItem = "";
-                     if (rawAltText && !this.isLikelyFilename(rawAltText) && rawAltText !== titleForIntermediateItem) {
-                        descriptionForIntermediateItem = rawAltText;
-                    }
-
-                    intermediateItems.push({
-                        type: 'question', // Assume image implies a question if not standalone
-                        title: titleForIntermediateItem,
-                        description: descriptionForIntermediateItem,
-                        question: {textQuestion: {paragraph: false}}, // Default to short answer for image questions from HTML
-                        imageFileToUpload: imageFileToUpload,
-                        originalImgSrc: imgSrc || undefined,
-                        imageAltText: rawAltText || (imageFileToUpload ? imageFileToUpload.name : '')
-                    });
-                });
-            } else if (textContentFromParent) { // Text-only paragraph/div
-                questionCounter++;
-                let qText = textContentFromParent;
-                if (!textContentFromParent.match(/^\s*\d+[\.\)]\s*/)) { // Add numbering if not already present
-                    qText = `${questionCounter}. ${textContentFromParent}`;
-                }
-                intermediateItems.push({
-                    type: 'question',
-                    title: qText,
-                    description: undefined,
-                    question: {textQuestion: {paragraph: true}}, // Assume paragraph for text blocks from HTML
-                    imageAltText: undefined
-                });
-            }
+          });
+        } else if (textContentFromParent) { // Text-only paragraph/div
+          questionCounter++;
+          let qText = textContentFromParent;
+          if (!textContentFromParent.match(/^\s*\d+[\.\)]\s*/)) { // Add numbering if not already present
+            qText = `${questionCounter}. ${textContentFromParent}`;
+          }
+          intermediateItems.push({
+            type: 'question',
+            title: qText,
+            description: undefined,
+            question: {textQuestion: {paragraph: true}}, // Assume paragraph for text blocks from HTML
+            imageAltText: undefined
+          });
         }
+      }
     });
     return intermediateItems;
   }
@@ -638,48 +616,48 @@ export class QtiToFormsService {
 
     const promptElement = itemBody?.querySelector('prompt') || presentation?.querySelector('prompt');
     if (promptElement) {
-        questionText = this.getTextContent(promptElement).trim();
+      questionText = this.getTextContent(promptElement).trim();
     }
 
     // Look for material/mattext as the primary question content if prompt is empty or not specific enough
     const materialContainer = itemBody || presentation; // Check both
     if (materialContainer) {
-        const matElements = Array.from(materialContainer.querySelectorAll('material > mattext[texttype="text/html"], material > mattext, mattext[texttype="text/html"], mattext'));
-        let tempHtmlForImageExtraction = "";
-        matElements.forEach(mat => {
-            const content = mat.textContent || "";
-            tempHtmlForImageExtraction += content;
-            if (!questionText && !this.isLikelyFilename(this.getTextContent(mat).trim())) { // Prioritize non-filename text for question
-                questionText = this.getTextContent(mat).trim();
-            }
-        });
-
-        // Image extraction from HTML content within material/mattext
-        if (tempHtmlForImageExtraction) {
-            const parser = new DOMParser();
-            const tempDoc = parser.parseFromString(decode(tempHtmlForImageExtraction), "text/html");
-            const imgTag = tempDoc.querySelector('img');
-            if (imgTag) {
-                originalImgSrc = imgTag.getAttribute('src') || undefined;
-                imageAltText = imgTag.getAttribute('alt') || undefined;
-                if (originalImgSrc) {
-                    const imagePath = this._resolveImagePath(originalImgSrc, sourceFileName);
-                    if (imagePath) {
-                        imageFileToUpload = allPackageFiles.find(f => f.name.toLowerCase() === imagePath.toLowerCase());
-                        if (!imageFileToUpload) console.warn(`   [QTI Standard] Image file not found for src: ${originalImgSrc} (resolved: ${imagePath})`);
-                    }
-                }
-                // If questionText is still empty and alt text is descriptive, use it.
-                if (!questionText && imageAltText && !this.isLikelyFilename(imageAltText)) {
-                    questionText = imageAltText;
-                }
-            }
+      const matElements = Array.from(materialContainer.querySelectorAll('material > mattext[texttype="text/html"], material > mattext, mattext[texttype="text/html"], mattext'));
+      let tempHtmlForImageExtraction = "";
+      matElements.forEach(mat => {
+        const content = mat.textContent || "";
+        tempHtmlForImageExtraction += content;
+        if (!questionText && !this.isLikelyFilename(this.getTextContent(mat).trim())) { // Prioritize non-filename text for question
+          questionText = this.getTextContent(mat).trim();
         }
+      });
+
+      // Image extraction from HTML content within material/mattext
+      if (tempHtmlForImageExtraction) {
+        const parser = new DOMParser();
+        const tempDoc = parser.parseFromString(decode(tempHtmlForImageExtraction), "text/html");
+        const imgTag = tempDoc.querySelector('img');
+        if (imgTag) {
+          originalImgSrc = imgTag.getAttribute('src') || undefined;
+          imageAltText = imgTag.getAttribute('alt') || undefined;
+          if (originalImgSrc) {
+            const imagePath = this._resolveImagePath(originalImgSrc, sourceFileName);
+            if (imagePath) {
+              imageFileToUpload = allPackageFiles.find(f => f.name.toLowerCase() === imagePath.toLowerCase());
+              if (!imageFileToUpload) console.warn(`   [QTI Standard] Image file not found for src: ${originalImgSrc} (resolved: ${imagePath})`);
+            }
+          }
+          // If questionText is still empty and alt text is descriptive, use it.
+          if (!questionText && imageAltText && !this.isLikelyFilename(imageAltText)) {
+            questionText = imageAltText;
+          }
+        }
+      }
     }
 
     if (!questionText && itemTitle) questionText = itemTitle; // Fallback to item title if no other text found
     if (!questionText && !itemTitle && imageFileToUpload) { // If only an image, use a default title
-        questionText = imageAltText && !this.isLikelyFilename(imageAltText) ? imageAltText : "Image-based question";
+      questionText = imageAltText && !this.isLikelyFilename(imageAltText) ? imageAltText : "Image-based question";
     }
 
     if (!questionText) {
@@ -691,10 +669,10 @@ export class QtiToFormsService {
     // Extract description from metadata or specific elements
     const descriptionMetaElement = itemElement.querySelector('itemmetadata > qtimetadata > qti_metadatafield[fieldlabel="qmd_description"] > fieldentry');
     if (descriptionMetaElement) {
-        itemDescription = this.getTextContent(descriptionMetaElement).trim();
+      itemDescription = this.getTextContent(descriptionMetaElement).trim();
     } else {
-        const rubricBlock = itemBody?.querySelector('rubricBlock'); // Common place for instructions/description
-        if (rubricBlock) itemDescription = this.getTextContent(rubricBlock).trim();
+      const rubricBlock = itemBody?.querySelector('rubricBlock'); // Common place for instructions/description
+      if (rubricBlock) itemDescription = this.getTextContent(rubricBlock).trim();
     }
 
 
@@ -728,7 +706,7 @@ export class QtiToFormsService {
         // For simpleChoice, text is direct child or in flow. For QTI 1.2 response_label, it's often in a following material/mattext.
         let textEl = choice;
         if (choice.tagName.toLowerCase() === 'response_label') {
-            textEl = choice.querySelector('material > mattext, mattext') || choice;
+          textEl = choice.querySelector('material > mattext, mattext') || choice;
         }
 
         choiceTextVal = this.getTextContent(textEl).trim();
@@ -766,14 +744,14 @@ export class QtiToFormsService {
         imageAltText: imageAltText
       });
     } else if (imageFileToUpload) { // If it's just an image with no clear question structure from QTI
-        intermediateItems.push({
-            type: 'image_standalone',
-            title: cleanQuestionText || (imageAltText && !this.isLikelyFilename(imageAltText) ? imageAltText : "Image"),
-            description: itemDescription || undefined,
-            imageFileToUpload: imageFileToUpload,
-            originalImgSrc: originalImgSrc,
-            imageAltText: imageAltText
-        });
+      intermediateItems.push({
+        type: 'image_standalone',
+        title: cleanQuestionText || (imageAltText && !this.isLikelyFilename(imageAltText) ? imageAltText : "Image"),
+        description: itemDescription || undefined,
+        imageFileToUpload: imageFileToUpload,
+        originalImgSrc: originalImgSrc,
+        imageAltText: imageAltText
+      });
     } else {
       console.warn(`   Skipping standard QTI item ${itemIdentifier}: Could not determine valid question structure and no standalone image found.`);
     }
@@ -791,12 +769,12 @@ export class QtiToFormsService {
 
     // Attempt to find points from qmd_weighting (common in QTI 1.2)
     const weightMetaField = Array.from(item.querySelectorAll('itemmetadata > qtimetadata > qti_metadatafield'))
-        .find(field => field.querySelector('fieldlabel')?.textContent?.trim().toLowerCase() === 'qmd_weighting');
+      .find(field => field.querySelector('fieldlabel')?.textContent?.trim().toLowerCase() === 'qmd_weighting');
     if (weightMetaField) {
-        const weightEntry = weightMetaField.querySelector('fieldentry');
-        if (weightEntry?.textContent) {
-            points = Math.round(parseFloat(weightEntry.textContent.trim())) || 1;
-        }
+      const weightEntry = weightMetaField.querySelector('fieldentry');
+      if (weightEntry?.textContent) {
+        points = Math.round(parseFloat(weightEntry.textContent.trim())) || 1;
+      }
     }
 
     // QTI 1.2 style: <respcondition> with <setvar> for score
@@ -837,39 +815,39 @@ export class QtiToFormsService {
     // QTI 2.1 style: <responseDeclaration> with <correctResponse>
     // This might also be a fallback if respconditions didn't yield answers.
     if (correctAnswerValues.length === 0) {
-        const responseDeclarations = Array.from(item.querySelectorAll('responseDeclaration'));
-        // Try to find the primary response declaration, often named "RESPONSE" or the one with mapping/correctResponse
-        const primaryResponseDecl = responseDeclarations.find(rd => rd.getAttribute('identifier')?.toUpperCase() === 'RESPONSE') ||
-                                   responseDeclarations.find(rd => rd.querySelector('correctResponse') || rd.querySelector('mapping')) ||
-                                   responseDeclarations[0];
+      const responseDeclarations = Array.from(item.querySelectorAll('responseDeclaration'));
+      // Try to find the primary response declaration, often named "RESPONSE" or the one with mapping/correctResponse
+      const primaryResponseDecl = responseDeclarations.find(rd => rd.getAttribute('identifier')?.toUpperCase() === 'RESPONSE') ||
+        responseDeclarations.find(rd => rd.querySelector('correctResponse') || rd.querySelector('mapping')) ||
+        responseDeclarations[0];
 
-        if (primaryResponseDecl) {
-            const mapping = primaryResponseDecl.querySelector('mapping');
-            if (mapping?.hasAttribute('defaultValue') && parseFloat(mapping.getAttribute('defaultValue') || '0') > 0) {
-                // If points from qmd_weighting was 1 (default), override with mapping defaultValue if it's a score
-                if (points === 1) points = Math.round(parseFloat(mapping.getAttribute('defaultValue')!)) || points;
-            }
-
-            const correctResponse = primaryResponseDecl.querySelector('correctResponse');
-            if (correctResponse) {
-                correctResponse.querySelectorAll('value').forEach(valueEl => {
-                const correctIdentifierOrValue = this.getTextContent(valueEl)?.trim(); // Use getTextContent
-                if (correctIdentifierOrValue) {
-                    if (questionType === 'CHOICE' && choicesMap) {
-                    // For QTI 2.1, value in correctResponse is usually the choice identifier
-                    const matchingChoice = choicesMap.find(c => c.identifier === correctIdentifierOrValue);
-                    if (matchingChoice && !correctAnswerValues.includes(matchingChoice.value)) {
-                        correctAnswerValues.push(matchingChoice.value);
-                    }
-                    } else if (questionType === 'TEXT') {
-                        if (!correctAnswerValues.includes(correctIdentifierOrValue)) {
-                             correctAnswerValues.push(correctIdentifierOrValue);
-                        }
-                    }
-                }
-                });
-            }
+      if (primaryResponseDecl) {
+        const mapping = primaryResponseDecl.querySelector('mapping');
+        if (mapping?.hasAttribute('defaultValue') && parseFloat(mapping.getAttribute('defaultValue') || '0') > 0) {
+          // If points from qmd_weighting was 1 (default), override with mapping defaultValue if it's a score
+          if (points === 1) points = Math.round(parseFloat(mapping.getAttribute('defaultValue')!)) || points;
         }
+
+        const correctResponse = primaryResponseDecl.querySelector('correctResponse');
+        if (correctResponse) {
+          correctResponse.querySelectorAll('value').forEach(valueEl => {
+            const correctIdentifierOrValue = this.getTextContent(valueEl)?.trim(); // Use getTextContent
+            if (correctIdentifierOrValue) {
+              if (questionType === 'CHOICE' && choicesMap) {
+                // For QTI 2.1, value in correctResponse is usually the choice identifier
+                const matchingChoice = choicesMap.find(c => c.identifier === correctIdentifierOrValue);
+                if (matchingChoice && !correctAnswerValues.includes(matchingChoice.value)) {
+                  correctAnswerValues.push(matchingChoice.value);
+                }
+              } else if (questionType === 'TEXT') {
+                if (!correctAnswerValues.includes(correctIdentifierOrValue)) {
+                  correctAnswerValues.push(correctIdentifierOrValue);
+                }
+              }
+            }
+          });
+        }
+      }
     }
 
 
@@ -888,21 +866,21 @@ export class QtiToFormsService {
     // Try to get text content, preferring text nodes directly to avoid innerHTML issues with entities
     let text = '';
     if (clonedElement.childNodes.length > 0) {
-        for (let i = 0; i < clonedElement.childNodes.length; i++) {
-            const node = clonedElement.childNodes[i];
-            if (node.nodeType === Node.TEXT_NODE) {
-                text += node.textContent;
-            } else if (node.nodeType === Node.ELEMENT_NODE && (node as Element).tagName.toLowerCase() !== 'img') { // Avoid alt from img if not already removed
-                text += (node as Element).textContent; // Recursive textContent for child elements
-            }
+      for (let i = 0; i < clonedElement.childNodes.length; i++) {
+        const node = clonedElement.childNodes[i];
+        if (node.nodeType === Node.TEXT_NODE) {
+          text += node.textContent;
+        } else if (node.nodeType === Node.ELEMENT_NODE && (node as Element).tagName.toLowerCase() !== 'img') { // Avoid alt from img if not already removed
+          text += (node as Element).textContent; // Recursive textContent for child elements
         }
+      }
     } else {
-        text = clonedElement.textContent || '';
+      text = clonedElement.textContent || '';
     }
 
     let decodedText = text;
     // Minimal decoding for common entities if DOM-based decoding isn't robust enough or fails
-    try {decodedText = decode(decodedText); } // from html-entities
+    try {decodedText = decode(decodedText);} // from html-entities
     catch (libError) {/* console.warn("[getTextContent] html-entities decoding failed.", libError); */}
 
     // Basic cleanup
@@ -922,13 +900,13 @@ export class QtiToFormsService {
     if (imgSrc.startsWith('$IMS-CC-FILEBASE$')) {
       relativePath = imgSrc.substring('$IMS-CC-FILEBASE$'.length);
       if (relativePath.startsWith('/')) { // If $IMS-CC-FILEBASE$/resource.gif
-          relativePath = relativePath.substring(1);
+        relativePath = relativePath.substring(1);
       }
       baseForResolution = ""; // Path is from root
     } else if (imgSrc.startsWith('/')) {
-        // Absolute path from package root (e.g. /images/pic.png)
-        relativePath = imgSrc.substring(1);
-        baseForResolution = "";
+      // Absolute path from package root (e.g. /images/pic.png)
+      relativePath = imgSrc.substring(1);
+      baseForResolution = "";
     }
     // If relativePath is still something like "../images/pic.png", baseForResolution will be used.
     // If relativePath is "images/pic.png", baseForResolution will be used.

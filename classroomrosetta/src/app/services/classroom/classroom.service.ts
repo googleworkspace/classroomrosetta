@@ -34,8 +34,8 @@ import {
   RetryConfig,
   BatchOperation,
   BatchResponseParser
-} from '../utilities/utilities.service'; // Assuming path is correct
-import {AuthService} from '../auth/auth.service'; // Import AuthService
+} from '../utilities/utilities.service';
+import {AuthService} from '../auth/auth.service';
 
 @Injectable({
   providedIn: 'root'
@@ -49,7 +49,7 @@ export class ClassroomService {
   // Injected services
   private http = inject(HttpClient);
   private utils = inject(UtilitiesService);
-  private auth = inject(AuthService); // Inject AuthService
+  private auth = inject(AuthService);
 
   // Default pagination and material limits
   private pageSize = '50';
@@ -77,7 +77,7 @@ export class ClassroomService {
       return throwError(() => new Error('Authentication token is required for getActiveClassrooms.'));
     }
 
-    return this.fetchClassroomPage(undefined, context, authToken).pipe( // Pass token to first call
+    return this.fetchClassroomPage(undefined, context, authToken).pipe(
       expand(response => {
         if (response.nextPageToken) {
           return this.fetchClassroomPage(response.nextPageToken, `${context} (paginated)`, authToken);
@@ -150,7 +150,7 @@ export class ClassroomService {
     const serviceCallId = `cs-assign-${Date.now()}`;
     console.log(`[ClassroomService][${serviceCallId}] assignContentToClassrooms: Starting for ${assignments.length} items to ${classroomIds.length} classrooms.`);
 
-    const authToken = this.auth.getGoogleAccessToken(); // Fetch token for this entire operation
+    const authToken = this.auth.getGoogleAccessToken();
     if (!authToken) {
       const errorMsg = `[ClassroomService][${serviceCallId}] Auth token missing. Cannot assign content.`;
       console.error(errorMsg);
@@ -200,7 +200,6 @@ export class ClassroomService {
           let topicId$ = topicRequestCache.get(cacheKey);
 
           if (!topicId$) {
-            // getOrCreateTopicId will fetch its own token
             topicId$ = this.getOrCreateTopicId(courseId, topicName).pipe(
               tap(resolvedTopicId => console.log(`${itemLogPrefix} Topic "${topicName || 'None'}" for course ${courseId} resolved to ID: ${resolvedTopicId || 'None'}`)),
               shareReplay(1),
@@ -257,7 +256,7 @@ export class ClassroomService {
               let operationBody: CourseWork | CourseWorkMaterial;
               if (effectiveItemForPart.workType === 'MATERIAL') {
                 path = `/v1/courses/${courseId}/courseWorkMaterials`;
-                operationBody = { /* ... as before ... */
+                operationBody = {
                   title: effectiveItemTitle,
                   description: effectiveItemForPart.descriptionForClassroom,
                   materials: materialChunkForPart,
@@ -267,7 +266,7 @@ export class ClassroomService {
                 };
               } else {
                 path = `/v1/courses/${courseId}/courseWork`;
-                operationBody = { /* ... as before ... */
+                operationBody = {
                   title: effectiveItemTitle,
                   description: effectiveItemForPart.descriptionForClassroom,
                   materials: materialChunkForPart,
@@ -304,7 +303,6 @@ export class ClassroomService {
       switchMap(() => {
         console.log(`[ClassroomService][${serviceCallId}] Prep complete. Batch ops: ${batchOperationsToExecute.length}. Tracked items: ${allItemsToTrackForBatchResult.length}.`);
         if (batchOperationsToExecute.length > 0) {
-          // Pass the fetched authToken to UtilitiesService
           return this.utils.executeBatchOperations<ProcessedCourseWork, CourseWork | CourseWorkMaterial>(
             batchOperationsToExecute,
             this.defaultRetryConfig,
@@ -347,9 +345,8 @@ export class ClassroomService {
     if (!normalizedTopicName) return of(undefined);
 
     const context = `getOrCreateTopicId (Course: ${courseId}, Topic: "${normalizedTopicName}")`;
-    // listAllTopics and createTopic will fetch their own tokens
 
-    return this.listAllTopics(courseId).pipe( // No authToken passed
+    return this.listAllTopics(courseId).pipe(
       switchMap(allTopics => {
         const found = allTopics.find(topic => topic.name?.toLowerCase() === normalizedTopicName.toLowerCase());
         if (found?.topicId) return of(found.topicId);
@@ -366,7 +363,6 @@ export class ClassroomService {
    */
   private listAllTopics(courseId: string): Observable<Topic[]> {
     const context = `listAllTopics (Course: ${courseId})`;
-    // fetchTopicPage will fetch its own token
     return this.fetchTopicPageInternal(courseId, undefined, context).pipe(
       expand(response => response.nextPageToken ? this.fetchTopicPageInternal(courseId, response.nextPageToken, `${context} (paginated)`) : EMPTY),
       map(response => response.topic || []),

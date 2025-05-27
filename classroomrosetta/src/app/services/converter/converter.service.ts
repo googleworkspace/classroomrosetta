@@ -196,7 +196,7 @@ export class ConverterService {
           } catch (error) {
             console.error(`Error processing direct resource (ID: ${resource.getAttribute('identifier') || 'unknown'}):`, error);
             this.skippedItemLog.push({id: resource.getAttribute('identifier') || undefined, title: resource.getAttribute('title') || 'Unknown direct resource', reason: `Error during processing: ${error instanceof Error ? error.message : String(error)}`});
-            return EMPTY; // Skip this resource on error
+            return EMPTY;
           }
         }),
         filter((result): result is ProcessedCourseWork => result !== null) // Filter out null results (skipped items)
@@ -555,10 +555,7 @@ export class ConverterService {
         courseworkBase.descriptionForDisplay = processedHtml.descriptionForDisplay;
         courseworkBase.richtext = processedHtml.richtext;
         courseworkBase.localFilesToUpload?.push(...processedHtml.referencedFiles);
-        // REMOVED: Do not add external links from HTML content as materials
-        // processedHtml.externalLinks.forEach(linkUrl => {
-        //   if (!courseworkBase.materials?.some(m => m.link?.url === linkUrl)) courseworkBase.materials?.push({link: {url: linkUrl}});
-        // });
+
         courseworkBase.descriptionForClassroom = processedHtml.descriptionForClassroom;
 
         // Heuristics to improve classroom description for discussions if the extracted text is too short or just the title.
@@ -597,10 +594,7 @@ export class ConverterService {
         courseworkBase.descriptionForClassroom = processedHtml.descriptionForClassroom || `Please review the content: ${finalTitle}`;
         courseworkBase.richtext = processedHtml.richtext;
         courseworkBase.localFilesToUpload?.push(...processedHtml.referencedFiles);
-        // REMOVED: Do not add external links from HTML content as materials
-        // processedHtml.externalLinks.forEach(linkUrl => {
-        //  if (!courseworkBase.materials?.some(m => m.link?.url === linkUrl)) courseworkBase.materials?.push({link: {url: linkUrl}});
-        // });
+
         courseworkBase.associatedWithDeveloper!.sourceHtmlFile = primaryResourceFile;
         courseworkBase.convertToGoogleDoc = true; // HTML content page is a candidate
         // console.log(`   [Converter] Processed HTML content for "${finalTitle}". Description length: ${courseworkBase.descriptionForClassroom.length}`); // Reduced verbosity

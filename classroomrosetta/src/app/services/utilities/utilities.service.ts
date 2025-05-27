@@ -19,7 +19,7 @@ import {HttpClient, HttpErrorResponse, HttpHeaders, HttpResponse} from '@angular
 import {Observable, throwError, timer, of, firstValueFrom} from 'rxjs';
 import {retry, catchError, map, tap} from 'rxjs/operators';
 import {decode} from 'html-entities';
-import {AuthService} from '../auth/auth.service'; // Import AuthService
+import {AuthService} from '../auth/auth.service';
 
 // Configuration interface for the retry logic
 export interface RetryConfig {
@@ -42,7 +42,7 @@ export interface BaseProcessedItem {
 // Generic interface for a single operation within a batch request
 export interface BatchOperation<P extends BaseProcessedItem, B> {
   id: string;
-  method: 'POST'; // Assuming POST for batch operations, can be generalized if needed
+  method: 'POST';
   path: string;
   body: B;
   processedItem: P;
@@ -138,7 +138,6 @@ export class UtilitiesService {
    * Fetches OAuth token internally.
    */
   public executeBatchOperations<P extends BaseProcessedItem, B>(
-    // authToken: string, // Removed authToken parameter
     initialOperations: BatchOperation<P, B>[],
     retryConfig: Required<RetryConfig>,
     batchUrl: string,
@@ -202,7 +201,6 @@ export class UtilitiesService {
         const operationsForCurrentBatch = operationsQueue.splice(0, maxOperationsPerBatch);
 
         try {
-          // Pass the fetched authToken to sendSingleBatchRequest
           const result: SingleBatchRequestResult<P, B> = await firstValueFrom(
             this.sendSingleBatchRequest<P, B>(authToken, operationsForCurrentBatch, retryConfig, batchUrl, responseParser)
           );
@@ -242,7 +240,7 @@ export class UtilitiesService {
    * This method still accepts authToken as it's called by executeBatchOperations which now manages the token.
    */
   public sendSingleBatchRequest<P extends BaseProcessedItem, B>(
-    authToken: string, // Still accepts authToken
+    authToken: string,
     operationsInBatch: BatchOperation<P, B>[],
     masterRetryConfig: Required<RetryConfig>,
     batchUrl: string,
@@ -296,7 +294,7 @@ export class UtilitiesService {
           return {processedOperationsThisAttempt: operationsInBatch, operationsToRetryNext: []};
         }
 
-        this.parseMultipartResponse<P, B>(responseBody, responseContentType, operationsInBatch, responseParser, httpResponse.body);
+        this.parseMultipartResponse<P, B>(responseBody, responseContentType, operationsInBatch, responseParser);
 
         const result: SingleBatchRequestResult<P, B> = {
           processedOperationsThisAttempt: operationsInBatch,
@@ -339,7 +337,6 @@ export class UtilitiesService {
     contentTypeHeader: string,
     batchedOperations: BatchOperation<P, B>[],
     responseParser: BatchResponseParser<P>,
-    rawFullResponseBodyForDebug?: string | null
   ): void {
     const boundaryMatch = contentTypeHeader.match(/boundary=([^;]+)/);
     if (!boundaryMatch) {
@@ -353,8 +350,6 @@ export class UtilitiesService {
     }
     const fullBoundary = `--${boundaryMatch[1].trim()}`;
     const parts = rawResponseBody.split(new RegExp(`(?:\\r\\n)?${fullBoundary}(?:\\r\\n)?`));
-
-    // console.log(`[Utils PARSE] Found ${parts.length - 2} potential parts (excluding pre-first and post-last boundaries). Boundary: "${fullBoundary}"`);
 
     for (let i = 0; i < parts.length; i++) {
       const rawPartContent = parts[i];

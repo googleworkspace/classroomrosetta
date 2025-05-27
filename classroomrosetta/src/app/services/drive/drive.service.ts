@@ -14,26 +14,13 @@
  * limitations under the License.
  */
 
-import { Injectable, inject } from '@angular/core';
-import {HttpClient, HttpHeaders, HttpParams, HttpErrorResponse} from '@angular/common/http';
-import { Observable, of, throwError, from } from 'rxjs';
-import { map, catchError, switchMap, shareReplay, tap } from 'rxjs/operators';
+import {Injectable, inject} from '@angular/core';
+import {HttpClient, HttpHeaders, HttpParams} from '@angular/common/http';
+import {Observable, of, throwError, from} from 'rxjs';
+import {map, catchError, switchMap, shareReplay, tap} from 'rxjs/operators';
 import {UtilitiesService} from '../utilities/utilities.service';
-import {AuthService} from '../auth/auth.service'; // Import AuthService
-
-/**
- * Interface for Google Drive API File resource (simplified)
- */
-interface DriveFile {
-  id: string;
-  name: string;
-  mimeType: string;
-  parents?: string[];
-  appProperties?: {[key: string]: string};
-  // Add other fields like webViewLink, thumbnailLink if needed by this service directly
-  webViewLink?: string;
-  thumbnailLink?: string;
-}
+import {AuthService} from '../auth/auth.service';
+import {DriveFile} from '../../interfaces/classroom-interface';
 
 /**
  * Interface for Drive API file list response (simplified)
@@ -109,12 +96,12 @@ export class DriveFolderService {
 
     // console.log(`Searching for folder by ItemId HASH "${hashedItemId}"`);
 
-    const searchRequest$ = this.http.get<DriveFileList>(this.DRIVE_API_URL, { headers, params });
+    const searchRequest$ = this.http.get<DriveFileList>(this.DRIVE_API_URL, {headers, params});
 
     return this.utils.retryRequest(
-        searchRequest$,
+      searchRequest$,
       {maxRetries: 3, initialDelayMs: 1000},
-        `Find Folder by Hash ${hashedItemId}`
+      `Find Folder by Hash ${hashedItemId}`
     ).pipe(
       map(response => {
         if (response.files && response.files.length > 0) {
@@ -153,12 +140,12 @@ export class DriveFolderService {
 
     // console.log(`Searching for folder "${folderName}" in parent "${parentFolderId}"`);
 
-    const searchRequest$ = this.http.get<DriveFileList>(this.DRIVE_API_URL, { headers, params });
+    const searchRequest$ = this.http.get<DriveFileList>(this.DRIVE_API_URL, {headers, params});
 
     return this.utils.retryRequest(
-        searchRequest$,
-        { maxRetries: 3, initialDelayMs: 1000 },
-        `Find Folder by Name "${folderName}"`
+      searchRequest$,
+      {maxRetries: 3, initialDelayMs: 1000},
+      `Find Folder by Name "${folderName}"`
     ).pipe(
       map(response => {
         if (response.files && response.files.length > 0) {
@@ -183,7 +170,7 @@ export class DriveFolderService {
    * Token is fetched internally.
    */
   private createFolder(folderName: string, parentFolderId: string, hashedItemId?: string): Observable<string> {
-    const headers = this.createDriveApiHeaders('application/json'); // Explicit content type for POST
+    const headers = this.createDriveApiHeaders('application/json');
     if (!headers) {
       return throwError(() => new Error('[DriveFolderService] Authentication token missing for createFolder.'));
     }
@@ -194,16 +181,16 @@ export class DriveFolderService {
       parents: [parentFolderId]
     };
     if (hashedItemId) {
-      metadata.appProperties = { [this.ITEM_ID_HASH_PROPERTY_KEY]: hashedItemId };
+      metadata.appProperties = {[this.ITEM_ID_HASH_PROPERTY_KEY]: hashedItemId};
     }
     const params = new HttpParams().set('fields', 'id, name, appProperties');
 
-    const createRequest$ = this.http.post<DriveFile>(this.DRIVE_API_URL, metadata, { headers, params });
+    const createRequest$ = this.http.post<DriveFile>(this.DRIVE_API_URL, metadata, {headers, params});
 
     return this.utils.retryRequest(
-        createRequest$,
-        { maxRetries: 3, initialDelayMs: 1500 },
-        `Create Folder "${folderName}"`
+      createRequest$,
+      {maxRetries: 3, initialDelayMs: 1500},
+      `Create Folder "${folderName}"`
     ).pipe(
       map(response => {
         console.log(`Created folder "${response.name}" with ID: ${response.id}` + (hashedItemId ? ` and ItemId HASH: ${response.appProperties?.[this.ITEM_ID_HASH_PROPERTY_KEY]}` : ''));
@@ -217,12 +204,11 @@ export class DriveFolderService {
     );
   }
 
- /**
- * Finds or creates a folder, using HASHED ItemId if provided.
- * Implements caching for the find/create operation. Token is fetched by underlying methods.
- */
+  /**
+  * Finds or creates a folder, using HASHED ItemId if provided.
+  * Implements caching for the find/create operation. Token is fetched by underlying methods.
+  */
   public findOrCreateFolder(folderName: string, parentFolderId: string, itemId?: string): Observable<string> {
-    // Token will be fetched by findFolderByHashedItemId, findFolderByName, or createFolder.
     let cacheKeyPrefix = itemId ? 'itemHash' : 'name';
 
     let operation$: Observable<string>;
@@ -235,12 +221,12 @@ export class DriveFolderService {
           if (this.findOrCreateFolderCache.has(itemSpecificCacheKey)) {
             return this.findOrCreateFolderCache.get(itemSpecificCacheKey)!;
           }
-          const newOp$ = this.findFolderByHashedItemId(hashedItemId).pipe( // No accessToken
+          const newOp$ = this.findFolderByHashedItemId(hashedItemId).pipe(
             switchMap(folderIdFromHash => {
               if (folderIdFromHash) {
                 return of(folderIdFromHash);
               } else {
-                return this.createFolder(folderName, parentFolderId, hashedItemId); // No accessToken
+                return this.createFolder(folderName, parentFolderId, hashedItemId);
               }
             }),
             shareReplay(1),
@@ -264,12 +250,12 @@ export class DriveFolderService {
       if (this.findOrCreateFolderCache.has(nameSpecificCacheKey)) {
         return this.findOrCreateFolderCache.get(nameSpecificCacheKey)!;
       }
-      operation$ = this.findFolderByName(folderName, parentFolderId).pipe( // No accessToken
+      operation$ = this.findFolderByName(folderName, parentFolderId).pipe(
         switchMap(folderIdFromName => {
           if (folderIdFromName) {
             return of(folderIdFromName);
           } else {
-            return this.createFolder(folderName, parentFolderId); // No accessToken
+            return this.createFolder(folderName, parentFolderId);
           }
         }),
         shareReplay(1),
@@ -282,7 +268,7 @@ export class DriveFolderService {
       this.findOrCreateFolderCache.set(nameSpecificCacheKey, operation$);
     }
     return operation$;
-}
+  }
 
 
   /**
@@ -308,9 +294,9 @@ export class DriveFolderService {
    */
   public getCourseFolderId(courseName: string): Observable<string> {
     const sanitizedCourseName = this.sanitizeFolderName(courseName);
-    return this.getRootImportFolderId().pipe( // No accessToken
+    return this.getRootImportFolderId().pipe(
       switchMap(rootImportFolderId =>
-        this.findOrCreateFolder(sanitizedCourseName, rootImportFolderId /* no itemId */) // No accessToken
+        this.findOrCreateFolder(sanitizedCourseName, rootImportFolderId /* no itemId */)
       ),
       tap(id => console.log(`Course Folder ID ("${sanitizedCourseName}"): ${id}`))
     );
@@ -322,8 +308,8 @@ export class DriveFolderService {
    */
   public getTopicFolderId(topicName: string, courseFolderId: string): Observable<string> {
     const sanitizedTopicName = this.sanitizeFolderName(topicName);
-    return this.findOrCreateFolder(sanitizedTopicName, courseFolderId /* no itemId */).pipe( // No accessToken
-        tap(id => console.log(`Topic Folder ID ("${sanitizedTopicName}") in course ${courseFolderId}: ${id}`))
+    return this.findOrCreateFolder(sanitizedTopicName, courseFolderId /* no itemId */).pipe(
+      tap(id => console.log(`Topic Folder ID ("${sanitizedTopicName}") in course ${courseFolderId}: ${id}`))
     );
   }
 
@@ -333,8 +319,8 @@ export class DriveFolderService {
    */
   public getAssignmentFolderId(assignmentName: string, topicFolderId: string, itemId: string): Observable<string> {
     const sanitizedAssignmentName = this.sanitizeFolderName(assignmentName);
-    return this.findOrCreateFolder(sanitizedAssignmentName, topicFolderId, itemId).pipe( // No accessToken
-        tap(id => console.log(`Assignment Folder ID ("${sanitizedAssignmentName}", itemId: ${itemId}) in topic ${topicFolderId}: ${id}`))
+    return this.findOrCreateFolder(sanitizedAssignmentName, topicFolderId, itemId).pipe(
+      tap(id => console.log(`Assignment Folder ID ("${sanitizedAssignmentName}", itemId: ${itemId}) in topic ${topicFolderId}: ${id}`))
     );
   }
 
@@ -356,9 +342,9 @@ export class DriveFolderService {
     }
     console.log(`Ensuring folder structure for: Course="${courseName}", Topic="${topicName}", Assignment="${assignmentName}" (ItemId: ${itemId})`);
 
-    return this.getCourseFolderId(courseName).pipe( // No accessToken
-      switchMap(courseFolderId => this.getTopicFolderId(topicName, courseFolderId)), // No accessToken
-      switchMap(topicFolderId => this.getAssignmentFolderId(assignmentName, topicFolderId, itemId)), // No accessToken
+    return this.getCourseFolderId(courseName).pipe(
+      switchMap(courseFolderId => this.getTopicFolderId(topicName, courseFolderId)),
+      switchMap(topicFolderId => this.getAssignmentFolderId(assignmentName, topicFolderId, itemId)),
       tap(assignmentFolderId => console.log(`Successfully ensured folder structure. Final Assignment Folder ID: ${assignmentFolderId} (for ItemId: ${itemId})`)),
       catchError(err => {
         const baseMessage = `Failed to ensure folder structure for assignment "${assignmentName}" (itemId: ${itemId})`;
@@ -377,9 +363,9 @@ export class DriveFolderService {
     return name.replace(/[\\/]/g, '_').replace(/:/g, '-').trim() || 'Untitled';
   }
 
-   /**
-   * Helper function to escape single quotes and backslashes for Drive API query parameters.
-   */
+  /**
+  * Helper function to escape single quotes and backslashes for Drive API query parameters.
+  */
   private escapeQueryParam(value: string): string {
     if (!value) return '';
     return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");

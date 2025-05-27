@@ -37,7 +37,6 @@ export class FileUploadService {
   // Define the fields to be requested from the Drive API for file metadata
   private readonly DRIVE_FILE_FIELDS_TO_REQUEST = 'id,name,mimeType,appProperties,webViewLink,parents,thumbnailLink';
 
-
   constructor() { }
 
   /**
@@ -151,7 +150,6 @@ export class FileUploadService {
                   blobPreparation$ = throwError(() => new Error(`Unexpected data type for file: ${fileToUpload.targetFileName}`));
                 }
 
-
                 return blobPreparation$.pipe(
                   switchMap(fileBlob => {
                     if (!fileBlob) {
@@ -159,7 +157,6 @@ export class FileUploadService {
                       return throwError(() => new Error(`Blob preparation failed for file: ${fileToUpload.targetFileName}`));
                     }
 
-                    // Fetch token for upload operation
                     const uploadHeaders = this.createDriveApiHeaders();
                     if (!uploadHeaders) {
                       return throwError(() => new Error(`[FileUploadService] Authentication token missing for uploading file: ${fileToUpload.targetFileName}`));
