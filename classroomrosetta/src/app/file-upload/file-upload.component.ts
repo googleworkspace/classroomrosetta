@@ -65,9 +65,9 @@ export interface ProcessingResult {
   assignmentName: string;
   topicName: string;
   assignmentFolderId: string;
-  createdDoc?: DriveFile;
-  createdForm?: Material;
-  uploadedFiles?: DriveFile[];
+  createdDoc?: DriveFile; // Doc from main description
+  createdForm?: Material; // Form from QTI
+  uploadedFiles?: DriveFile[]; // Includes other uploaded files AND docs converted from HTML assets
   error: StagedProcessingError | null;
   finalHtmlDescription?: string;
   finalPlainTextDescription?: string;
@@ -180,7 +180,7 @@ export class FileUploadComponent {
 
       const resolvedFiles = await Promise.all(filePromises);
       this.unzippedFiles = resolvedFiles.filter(f => f !== null) as UnzippedFile[];
-      console.log(`[Orchestrator] Unzipped files prepared: ${this.unzippedFiles.length} files.`);
+      console.log(`[Orchestrator] Unzipped files prepared: ${this.unzippedFiles.length} files.`, this.unzippedFiles);
 
       const imsccFilesForConverter: ImsccFile[] = this.unzippedFiles.map(uf => ({
         name: uf.name, data: uf.data, mimeType: uf.mimeType
@@ -285,7 +285,7 @@ export class FileUploadComponent {
       name: uf.name, data: uf.data, mimeType: uf.mimeType
     }));
 
-    // Stage 1: Process content. Token is no longer passed here.
+    // Stage 1: Process content.
     this.processAssignmentsAndCreateContent(courseName, assignmentsReadyForDriveProcessing, allPackageFilesForServices).pipe(
       tap(driveProcessingResults => {
         console.log('[Orchestrator] Content preparation stage (Drive, QTI, HTML) completed.');
@@ -338,7 +338,7 @@ export class FileUploadComponent {
         this.loadingMessage = `Submitting ${updatedAssignmentsForClassroom.length} assignment(s) to ${selectedContent.classroomIds.length} classroom(s)... This may take some time.`;
         this.changeDetectorRef.markForCheck();
 
-        // Stage 2: Call ClassroomService. Token is no longer passed here.
+        // Stage 2: Call ClassroomService.
         return this.classroom.assignContentToClassrooms(selectedContent.classroomIds, updatedAssignmentsForClassroom).pipe(
           map(classroomServiceResults => {
             console.log('[Orchestrator] Received final results from ClassroomService.assignContentToClassrooms.');
@@ -429,7 +429,7 @@ export class FileUploadComponent {
   processAssignmentsAndCreateContent(
     courseName: string,
     itemsToProcess: ProcessedCourseWork[],
-    allPackageImsccFiles: ImsccFile[]
+    allPackageImsccFiles: ImsccFile[] // Full list of unzipped files for context if needed by services
   ): Observable<ProcessingResult[]> {
     console.log(`[Orchestrator] processAssignmentsAndCreateContent: Starting content preparation for ${itemsToProcess.length} items.`);
     if (itemsToProcess.length === 0) {
@@ -439,25 +439,13 @@ export class FileUploadComponent {
     return from(itemsToProcess).pipe(
       concatMap((item, index) => {
         const itemLogPrefix = `ContentPrep Item ${index + 1}/${itemsToProcess.length} ("${item.title?.substring(0, 30)}..."):`;
-        this.loadingMessage = itemLogPrefix;
+        this.loadingMessage = `${itemLogPrefix} Preparing...`;
         this.changeDetectorRef.markForCheck();
         console.log(`${itemLogPrefix} Beginning content preparation.`);
 
         const assignmentName = item.title || 'Untitled Assignment';
         const driveTopicFolderName = item.associatedWithDeveloper?.topic || 'General';
-        let htmlDescriptionForProcessing = item.descriptionForDisplay;
         const itemId = item.associatedWithDeveloper?.id;
-
-        const filesToUploadForDriveService = (item.localFilesToUpload || []).map(ftu => {
-          const originalUnzippedFile = this.unzippedFiles.find(uzf => uzf.name === ftu.file.name);
-          if (originalUnzippedFile && originalUnzippedFile.data instanceof ArrayBuffer) {
-            return {...ftu, file: {...ftu.file, data: originalUnzippedFile.data}};
-          }
-          return ftu;
-        });
-
-        const qtiFileForService: ImsccFile | undefined = item.qtiFile?.[0];
-        const shouldCreateDoc = !qtiFileForService && !!htmlDescriptionForProcessing && item.workType === 'ASSIGNMENT' && !!item.richtext;
 
         if (!itemId) {
           console.error(`${itemLogPrefix} Critical error: Item is missing associatedDeveloper.id. Skipping content prep.`);
@@ -467,68 +455,170 @@ export class FileUploadComponent {
           } as ProcessingResult);
         }
 
+        const qtiFileForService: ImsccFile | undefined = item.qtiFile?.[0];
+        // Check if a main Doc should be created from the item's HTML description
+        const shouldCreateDocFromDescription = !qtiFileForService && !!item.descriptionForDisplay && item.workType === 'ASSIGNMENT' && !!item.richtext;
+
+        // This list will be used by replaceLocalLinksInHtml to understand original file references.
+        const allOriginalLocalFilesInfo = (item.localFilesToUpload || []).map(ftu => {
+          const originalUnzippedFile = this.unzippedFiles.find(uzf => uzf.name === ftu.file.name);
+          return {
+            ...ftu,
+            file: { // Ensure ImsccFile structure with data
+              name: ftu.file.name,
+              mimeType: originalUnzippedFile?.mimeType || this.util.getMimeTypeFromExtension(ftu.file.name),
+              data: originalUnzippedFile?.data || '' // Provide data from unzippedFiles
+            }
+          };
+        });
+
+
         return this.drive.ensureAssignmentFolderStructure(courseName, driveTopicFolderName, assignmentName, itemId).pipe(
           switchMap(assignmentFolderId => {
-            const uploadedFiles$: Observable<DriveFile[]> = (filesToUploadForDriveService.length > 0 ?
-              this.files.uploadLocalFiles(filesToUploadForDriveService, assignmentFolderId) :
+            this.loadingMessage = `${itemLogPrefix} Folder ensured. Processing files...`;
+            this.changeDetectorRef.markForCheck();
+
+            // 1. Categorize local files from item.localFilesToUpload
+            const htmlFileAssetsToConvert: Array<{file: ImsccFile; targetFileName: string}> = [];
+            const otherLocalFilesToUploadInfo: Array<{file: ImsccFile; targetFileName: string}> = [];
+
+            allOriginalLocalFilesInfo.forEach(ftu => {
+              // Ensure ftu.file.data is populated from unzippedFiles if it was just a reference
+              const originalUnzippedFile = this.unzippedFiles.find(uzf => uzf.name === ftu.file.name);
+              const fileWithData = {
+                ...ftu,
+                file: {
+                  ...ftu.file,
+                  data: originalUnzippedFile?.data || ftu.file.data, // Prioritize fresh unzipped data
+                  mimeType: originalUnzippedFile?.mimeType || ftu.file.mimeType
+                }
+              };
+
+              if (fileWithData.file.mimeType === 'text/html' ||
+                fileWithData.file.name.toLowerCase().endsWith('.html') ||
+                fileWithData.file.name.toLowerCase().endsWith('.htm')) {
+                htmlFileAssetsToConvert.push(fileWithData);
+              } else {
+                otherLocalFilesToUploadInfo.push(fileWithData);
+              }
+            });
+
+            console.log(`${itemLogPrefix} HTML files to convert: ${htmlFileAssetsToConvert.length}, Other files to upload: ${otherLocalFilesToUploadInfo.length}`);
+
+            // 2. Observable for uploading other (non-HTML) local files
+            const uploadedOtherFiles$: Observable<DriveFile[]> = (otherLocalFilesToUploadInfo.length > 0 ?
+              this.files.uploadLocalFiles(otherLocalFilesToUploadInfo, assignmentFolderId) : // Uses the enriched otherLocalFilesToUploadInfo
               of([])
             ).pipe(
-              tap(uploaded => console.log(`${itemLogPrefix} ${uploaded.length} local files uploaded.`)),
+              tap(uploaded => console.log(`${itemLogPrefix} ${uploaded.length} other local files uploaded.`)),
               catchError(uploadErr => {
-                console.error(`${itemLogPrefix} Error uploading files:`, uploadErr);
-                return throwError(() => ({message: `File upload failed: ${uploadErr.message}`, stage: 'File Upload', details: uploadErr, itemId}));
+                console.error(`${itemLogPrefix} Error uploading other files:`, uploadErr);
+                return throwError(() => ({message: `Other file upload failed: ${uploadErr.message}`, stage: 'Other File Upload', details: uploadErr, itemId}));
               }),
               shareReplay(1)
             );
 
-            let primaryContentCreation$: Observable<DriveFile | Material | null>;
-            let currentHtmlContent = htmlDescriptionForProcessing;
-
-            if (qtiFileForService) {
-              primaryContentCreation$ = this.qti.createFormFromQti(qtiFileForService, allPackageImsccFiles, assignmentName, itemId, assignmentFolderId)
-                .pipe(
-                  tap(form => console.log(`${itemLogPrefix} QTI Form created/found.`)),
-                  catchError(qtiErr => throwError(() => ({message: `QTI to Form failed: ${qtiErr.message}`, stage: 'QTI Processing', details: qtiErr, itemId})))
-                );
-            } else if (shouldCreateDoc) {
-              primaryContentCreation$ = uploadedFiles$.pipe(
-                switchMap(uploadedDriveFiles => {
-                  if (currentHtmlContent) {
-                    currentHtmlContent = this.replaceLocalLinksInHtml(currentHtmlContent, uploadedDriveFiles, filesToUploadForDriveService, itemLogPrefix);
+            // 3. Observable for converting HTML file assets to Google Docs
+            const convertedHtmlDocs$: Observable<DriveFile[]> = htmlFileAssetsToConvert.length > 0 ?
+              forkJoin(
+                htmlFileAssetsToConvert.map(htmlFtu => {
+                  const htmlContent = typeof htmlFtu.file.data === 'string' ? htmlFtu.file.data : '';
+                  if (!htmlContent && typeof htmlFtu.file.data !== 'string') {
+                    console.warn(`${itemLogPrefix} HTML file ${htmlFtu.file.name} has non-string data, attempting to decode if ArrayBuffer.`);
+                    // This case should ideally be handled by unzipAndConvert to always yield string for text types
                   }
-                  return this.docs.createDocFromHtml(currentHtmlContent || '', assignmentName, itemId, assignmentFolderId); // No accessToken
-                }),
-                tap(doc => console.log(`${itemLogPrefix} HTML Doc created/found.`)),
-                catchError(docErr => throwError(() => ({message: `HTML to Doc failed: ${docErr.message}`, stage: 'HTML to Doc', details: docErr, itemId})))
-              );
-            } else {
-              primaryContentCreation$ = uploadedFiles$.pipe(
-                map(uploadedDriveFiles => {
-                  if (currentHtmlContent) {
-                    currentHtmlContent = this.replaceLocalLinksInHtml(currentHtmlContent, uploadedDriveFiles, filesToUploadForDriveService, itemLogPrefix);
+                  if (!htmlContent) {
+                    console.warn(`${itemLogPrefix} HTML file ${htmlFtu.file.name} has no string content. Skipping conversion.`);
+                    return of(null); // Will be filtered out
                   }
-                  return null;
-                }),
-                catchError(linkErr => throwError(() => ({message: `HTML link processing failed: ${linkErr.message}`, stage: 'HTML Link Processing', details: linkErr, itemId})))
-              );
-            }
+                  // Use targetFileName for the Doc title, as replaceLocalLinksInHtml expects this for matching.
+                  const docTitle = htmlFtu.targetFileName || this.util.getFileNameWithoutExtension(this.util.getBasename(htmlFtu.file.name)) || 'Converted HTML Document';
 
+                  console.log(`${itemLogPrefix} Converting HTML asset "${htmlFtu.file.name}" to Doc titled "${docTitle}".`);
+                  return this.docs.createDocFromHtml(htmlContent, docTitle, itemId, assignmentFolderId).pipe(
+                    catchError(docErr => {
+                      console.error(`${itemLogPrefix} Error converting HTML file ${htmlFtu.file.name} to Doc:`, docErr);
+                      return of(null); // Individual error, return null to filter out later
+                    })
+                  );
+                })
+              ).pipe(
+                map(results => results.filter(r => r !== null) as DriveFile[]), // Filter out failed conversions
+                tap(docs => console.log(`${itemLogPrefix} ${docs.length} HTML file assets converted to Docs.`)),
+                catchError(htmlConversionErr => {
+                  console.error(`${itemLogPrefix} Error during batch HTML asset to Doc conversion:`, htmlConversionErr);
+                  return throwError(() => ({message: `Batch HTML to Docs failed: ${htmlConversionErr.message}`, stage: 'HTML Assets to Docs Batch', details: htmlConversionErr, itemId}));
+                })
+              ) :
+              of([]); // No HTML files to convert
+
+            // First, process all file uploads and HTML-to-Doc conversions for assets
             return forkJoin({
-              uploadedFilesResult: uploadedFiles$,
-              createdContentResult: primaryContentCreation$
+              uploadedOthers: uploadedOtherFiles$,
+              convertedHtmls: convertedHtmlDocs$
             }).pipe(
-              map(({uploadedFilesResult, createdContentResult}) => {
-                const finalHtmlDesc = currentHtmlContent || '';
-                const finalPlainTextDesc = this.generatePlainText(finalHtmlDesc);
-                return {
-                  itemId, assignmentName, topicName: driveTopicFolderName, assignmentFolderId,
-                  createdDoc: (createdContentResult && 'mimeType' in createdContentResult && (createdContentResult as DriveFile).mimeType !== 'application/vnd.google-apps.form') ? createdContentResult as DriveFile : undefined,
-                  createdForm: (createdContentResult && 'form' in createdContentResult) ? createdContentResult as Material : undefined,
-                  uploadedFiles: uploadedFilesResult,
-                  error: null,
-                  finalHtmlDescription: finalHtmlDesc,
-                  finalPlainTextDescription: finalPlainTextDesc
-                } as ProcessingResult;
+              switchMap(({uploadedOthers, convertedHtmls}) => {
+                this.loadingMessage = `${itemLogPrefix} Files processed. Handling description & primary content...`;
+                this.changeDetectorRef.markForCheck();
+
+                const allSupportingDriveFiles: DriveFile[] = [...uploadedOthers, ...convertedHtmls];
+                console.log(`${itemLogPrefix} Total supporting Drive files (uploaded + converted HTML assets): ${allSupportingDriveFiles.length}`);
+                allSupportingDriveFiles.forEach(df => console.log(`  - ${df.name} (ID: ${df.id})`));
+
+
+                let currentHtmlDescriptionForProcessing = item.descriptionForDisplay;
+
+                if (currentHtmlDescriptionForProcessing) {
+                  console.log(`${itemLogPrefix} Replacing local links in main HTML description using all supporting files.`);
+                  currentHtmlDescriptionForProcessing = this.replaceLocalLinksInHtml(
+                    currentHtmlDescriptionForProcessing,
+                    allSupportingDriveFiles, // Pass the combined list
+                    allOriginalLocalFilesInfo, // Use the comprehensive list for matching original paths
+                    itemLogPrefix
+                  );
+                }
+
+            // 4. Primary Content Creation (QTI or description-based Doc)
+                let primaryContentCreation$: Observable<DriveFile | Material | null>;
+
+                if (qtiFileForService) {
+                  console.log(`${itemLogPrefix} Creating QTI Form.`);
+                  primaryContentCreation$ = this.qti.createFormFromQti(qtiFileForService, allPackageImsccFiles, assignmentName, itemId, assignmentFolderId)
+                    .pipe(
+                      tap(form => console.log(`${itemLogPrefix} QTI Form created/found.`)),
+                      catchError(qtiErr => throwError(() => ({message: `QTI to Form failed: ${qtiErr.message}`, stage: 'QTI Processing', details: qtiErr, itemId})))
+                    );
+                } else if (shouldCreateDocFromDescription) {
+                  console.log(`${itemLogPrefix} Creating Doc from main HTML description (after link replacement).`);
+                  primaryContentCreation$ = this.docs.createDocFromHtml(currentHtmlDescriptionForProcessing || '', assignmentName, itemId, assignmentFolderId)
+                    .pipe(
+                      tap(doc => console.log(`${itemLogPrefix} Main HTML Doc created/found.`)),
+                      catchError(docErr => throwError(() => ({message: `HTML to Doc (description) failed: ${docErr.message}`, stage: 'HTML to Doc (Description)', details: docErr, itemId})))
+                    );
+                } else {
+                  console.log(`${itemLogPrefix} No primary QTI/Doc content to create from description. Description (if any) already processed for links.`);
+                  primaryContentCreation$ = of(null);
+                }
+
+                // This inner forkJoin is just to structure the return if primaryContentCreation$ is also an observable
+                // If primaryContentCreation$ is already resolved (e.g. of(null)), this map is simpler.
+                return primaryContentCreation$.pipe(
+                  map(createdPrimaryContentResult => {
+                    const finalHtmlDesc = currentHtmlDescriptionForProcessing || '';
+                    const finalPlainTextDesc = this.generatePlainText(finalHtmlDesc);
+
+                      console.log(`${itemLogPrefix} Content preparation for item completed successfully.`);
+                      return {
+                        itemId, assignmentName, topicName: driveTopicFolderName, assignmentFolderId,
+                          createdDoc: (createdPrimaryContentResult && 'mimeType' in createdPrimaryContentResult && (createdPrimaryContentResult as DriveFile).mimeType !== 'application/vnd.google-apps.form') ? createdPrimaryContentResult as DriveFile : undefined,
+                          createdForm: (createdPrimaryContentResult && 'form' in createdPrimaryContentResult) ? createdPrimaryContentResult as Material : undefined,
+                          uploadedFiles: allSupportingDriveFiles, // CRITICAL: This now includes all processed local files
+                          error: null,
+                          finalHtmlDescription: finalHtmlDesc,
+                          finalPlainTextDescription: finalPlainTextDesc
+                        } as ProcessingResult;
+                    })
+                );
               })
             );
           }),
@@ -536,12 +626,13 @@ export class FileUploadComponent {
             const stage = errorFromStage?.stage || 'Content Preparation Sub-Stage';
             const message = errorFromStage?.message || 'Unknown error during content prep sub-stage.';
             console.error(`${itemLogPrefix} Error during content prep for item. Stage: ${stage}, Msg: ${message}`, errorFromStage.details);
+            const originalDescription = item.descriptionForDisplay;
             return of({
               itemId, assignmentName, topicName: driveTopicFolderName,
-              assignmentFolderId: 'ERROR_CONTENT_PREP',
+              assignmentFolderId: errorFromStage?.assignmentFolderId || 'ERROR_CONTENT_PREP',
               error: {message, stage, details: errorFromStage.details || errorFromStage},
-              finalHtmlDescription: htmlDescriptionForProcessing,
-              finalPlainTextDescription: this.generatePlainText(htmlDescriptionForProcessing)
+              finalHtmlDescription: originalDescription,
+              finalPlainTextDescription: this.generatePlainText(originalDescription)
             } as ProcessingResult);
           })
         );
@@ -552,8 +643,8 @@ export class FileUploadComponent {
 
   private replaceLocalLinksInHtml(
     htmlContent: string,
-    uploadedDriveFiles: DriveFile[],
-    filesOriginallyQueuedForUpload: Array<{file: ImsccFile; targetFileName: string}>,
+    uploadedDriveFiles: DriveFile[], // This now contains ALL Drive files (uploaded + converted HTMLs)
+    filesOriginallyQueuedForUpload: Array<{file: ImsccFile; targetFileName: string}>, // This is the original list from item.localFilesToUpload, used for context
     itemLogPrefix: string
   ): string {
     if (!htmlContent) return '';
@@ -568,19 +659,39 @@ export class FileUploadComponent {
 
       body.querySelectorAll('a[data-imscc-original-path]').forEach((anchor: Element) => {
         const htmlAnchor = anchor as HTMLAnchorElement;
-        const originalPath = htmlAnchor.getAttribute('data-imscc-original-path');
-        const displayTitleAttr = decode(htmlAnchor.getAttribute('data-imscc-display-title') || htmlAnchor.textContent || 'Linked File');
+        const originalPathAttribute = htmlAnchor.getAttribute('data-imscc-original-path');
+        const displayTitleAttr = decode(htmlAnchor.getAttribute('data-imscc-display-title') || htmlAnchor.textContent || originalPathAttribute || 'Linked File');
 
-        if (originalPath) {
+        if (originalPathAttribute) {
           let matchedDriveFile: DriveFile | undefined;
-          const normalizedOriginalPath = normalizeSpacesString(this.util.tryDecodeURIComponent(originalPath).toLowerCase());
+          const normalizedOriginalPathAttr = normalizeSpacesString(this.util.tryDecodeURIComponent(originalPathAttribute).toLowerCase());
 
-          for (const ftu of filesOriginallyQueuedForUpload) {
+          // Find the original file info from the queued list that corresponds to this link's original path
+          const originalQueuedFileInfo = filesOriginallyQueuedForUpload.find(ftu => {
             const decodedFullZipPath = this.util.tryDecodeURIComponent(ftu.file.name);
-            const normalizedFtuName = normalizeSpacesString(decodedFullZipPath.toLowerCase());
-            if (normalizedFtuName.endsWith(normalizedOriginalPath) || normalizedOriginalPath.endsWith(normalizedFtuName)) {
-              matchedDriveFile = uploadedDriveFiles.find(udf => udf.name === ftu.targetFileName);
-              if (matchedDriveFile) break;
+            const normalizedFtuNameInZip = normalizeSpacesString(decodedFullZipPath.toLowerCase());
+            // Match if the full path in zip ends with the original path from HTML attribute, or vice-versa.
+            // Or, if originalPathAttribute is just the basename.
+            const ftuBasename = this.util.getBasename(normalizedFtuNameInZip).toLowerCase();
+            return normalizedFtuNameInZip.endsWith(normalizedOriginalPathAttr) ||
+              normalizedOriginalPathAttr.endsWith(normalizedFtuNameInZip) ||
+              ftuBasename === normalizedOriginalPathAttr;
+          });
+
+          if (originalQueuedFileInfo) {
+            // Now, find this file in the uploadedDriveFiles list.
+            // The DriveFile name should match originalQueuedFileInfo.targetFileName (which was used as title for HTML-to-Doc)
+            const targetFileNameToMatchLower = normalizeSpacesString(originalQueuedFileInfo.targetFileName.toLowerCase());
+            matchedDriveFile = uploadedDriveFiles.find(udf =>
+              normalizeSpacesString(udf.name?.toLowerCase() || '') === targetFileNameToMatchLower
+            );
+            if (!matchedDriveFile) { // Fallback: try matching against basename without extension if targetFileName included .html
+              const targetBasenameNoExtLower = normalizeSpacesString(this.util.getFileNameWithoutExtension(this.util.getBasename(originalQueuedFileInfo.targetFileName)).toLowerCase());
+              if (targetBasenameNoExtLower) {
+                matchedDriveFile = uploadedDriveFiles.find(udf =>
+                  normalizeSpacesString(this.util.getFileNameWithoutExtension(udf.name)?.toLowerCase() || '') === targetBasenameNoExtLower
+                );
+              }
             }
           }
 
@@ -589,9 +700,9 @@ export class FileUploadComponent {
             htmlAnchor.target = '_blank';
             htmlAnchor.rel = 'noopener noreferrer';
             htmlAnchor.textContent = displayTitleAttr;
-            console.log(`${itemLogPrefix} Updated anchor for "${originalPath}" to Drive link: ${matchedDriveFile.webViewLink} with text "${displayTitleAttr}".`);
+            console.log(`${itemLogPrefix} Updated anchor for "${originalPathAttribute}" (Original Target: ${originalQueuedFileInfo?.targetFileName}) to Drive link: ${matchedDriveFile.webViewLink} (Matched Drive File: ${matchedDriveFile.name}).`);
           } else {
-            console.warn(`${itemLogPrefix} No Drive file found for local link anchor: "${originalPath}". Original text: "${displayTitleAttr}"`);
+            console.warn(`${itemLogPrefix} No Drive file found for local link anchor: "${originalPathAttribute}" (Original Target: ${originalQueuedFileInfo?.targetFileName}). Original text: "${displayTitleAttr}"`);
             htmlAnchor.textContent = `[Broken Link: ${displayTitleAttr}]`;
             htmlAnchor.removeAttribute('href');
           }
@@ -603,18 +714,34 @@ export class FileUploadComponent {
 
       body.querySelectorAll('span.imscc-local-file-placeholder[data-original-path]').forEach((span: Element) => {
         const htmlSpan = span as HTMLSpanElement;
-        const originalPath = htmlSpan.getAttribute('data-original-path');
-        const displayDefaultText = decode(htmlSpan.textContent || 'Linked Content');
+        const originalPathAttribute = htmlSpan.getAttribute('data-original-path');
+        const displayDefaultText = decode(htmlSpan.textContent || originalPathAttribute || 'Linked Content');
 
-        if (originalPath) {
+        if (originalPathAttribute) {
           let matchedDriveFile: DriveFile | undefined;
-          const normalizedOriginalPath = normalizeSpacesString(this.util.tryDecodeURIComponent(originalPath).toLowerCase());
-          for (const ftu of filesOriginallyQueuedForUpload) {
+          const normalizedOriginalPathAttr = normalizeSpacesString(this.util.tryDecodeURIComponent(originalPathAttribute).toLowerCase());
+
+          const originalQueuedFileInfo = filesOriginallyQueuedForUpload.find(ftu => {
             const decodedFullZipPath = this.util.tryDecodeURIComponent(ftu.file.name);
-            const normalizedFtuName = normalizeSpacesString(decodedFullZipPath.toLowerCase());
-            if (normalizedFtuName.endsWith(normalizedOriginalPath) || normalizedOriginalPath.endsWith(normalizedFtuName)) {
-              matchedDriveFile = uploadedDriveFiles.find(udf => udf.name === ftu.targetFileName);
-              if (matchedDriveFile) break;
+            const normalizedFtuNameInZip = normalizeSpacesString(decodedFullZipPath.toLowerCase());
+            const ftuBasename = this.util.getBasename(normalizedFtuNameInZip).toLowerCase();
+            return normalizedFtuNameInZip.endsWith(normalizedOriginalPathAttr) ||
+              normalizedOriginalPathAttr.endsWith(normalizedFtuNameInZip) ||
+              ftuBasename === normalizedOriginalPathAttr;
+          });
+
+          if (originalQueuedFileInfo) {
+            const targetFileNameToMatchLower = normalizeSpacesString(originalQueuedFileInfo.targetFileName.toLowerCase());
+            matchedDriveFile = uploadedDriveFiles.find(udf =>
+              normalizeSpacesString(udf.name?.toLowerCase() || '') === targetFileNameToMatchLower
+            );
+            if (!matchedDriveFile) {
+              const targetBasenameNoExtLower = normalizeSpacesString(this.util.getFileNameWithoutExtension(this.util.getBasename(originalQueuedFileInfo.targetFileName)).toLowerCase());
+              if (targetBasenameNoExtLower) {
+                matchedDriveFile = uploadedDriveFiles.find(udf =>
+                  normalizeSpacesString(this.util.getFileNameWithoutExtension(udf.name)?.toLowerCase() || '') === targetBasenameNoExtLower
+                );
+              }
             }
           }
 
@@ -625,9 +752,9 @@ export class FileUploadComponent {
             newAnchor.rel = 'noopener noreferrer';
             newAnchor.textContent = displayDefaultText;
             span.parentNode?.replaceChild(newAnchor, span);
-            console.log(`${itemLogPrefix} Replaced SPAN placeholder for "${originalPath}" with Drive link.`);
+            console.log(`${itemLogPrefix} Replaced SPAN placeholder for "${originalPathAttribute}" (Original Target: ${originalQueuedFileInfo?.targetFileName}) with Drive link (Matched Drive File: ${matchedDriveFile.name}).`);
           } else {
-            console.warn(`${itemLogPrefix} No Drive file found for SPAN placeholder: "${originalPath}".`);
+            console.warn(`${itemLogPrefix} No Drive file found for SPAN placeholder: "${originalPathAttribute}" (Original Target: ${originalQueuedFileInfo?.targetFileName}).`);
             htmlSpan.textContent = `[Broken Content: ${displayDefaultText}]`;
             htmlSpan.style.color = "red";
           }
@@ -696,18 +823,25 @@ export class FileUploadComponent {
       const result = driveProcessingResults.find(r => r.itemId === updatedItem.associatedWithDeveloper?.id);
 
       if (result && !result.error) {
+        // Add the primary Google Doc (from HTML description) if it was created
         if (result.createdDoc?.id && result.createdDoc?.name) {
           updatedItem.materials.push({
             driveFile: {driveFile: {id: result.createdDoc.id, title: result.createdDoc.name}, shareMode: 'STUDENT_COPY'}
           });
         }
+        // Add the Google Form (from QTI) if it was created
         if (result.createdForm?.form?.formUrl) {
           updatedItem.materials.push({
             link: {url: result.createdForm.form.formUrl, title: result.createdForm.form.title || result.assignmentName}
           });
         }
+
+        // Add all other uploaded/converted files as materials
+        // result.uploadedFiles now contains both directly uploaded files AND HTML files converted to Docs
         (result.uploadedFiles || []).forEach(uploadedFile => {
           if (uploadedFile?.id && uploadedFile?.name) {
+            // Avoid re-adding the main description doc if it's also in uploadedFiles
+            // (though current logic should keep them separate: createdDoc vs. uploadedFiles)
             if (!(result.createdDoc?.id === uploadedFile.id)) {
               updatedItem.materials.push({
                 driveFile: {driveFile: {id: uploadedFile.id, title: uploadedFile.name}, shareMode: 'VIEW'}

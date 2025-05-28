@@ -619,4 +619,32 @@ export class UtilitiesService {
     return combinedParts.join('/');
   }
 
+  /**
+   * Gets the filename without its last extension.
+   * Example: "archive.tar.gz" -> "archive.tar", "image.jpeg" -> "image", "file" -> "file"
+   */
+  public getFileNameWithoutExtension(fileName: string | undefined | null): string {
+    if (!fileName) {
+      return '';
+    }
+    const lastDotIndex = fileName.lastIndexOf('.');
+    // If there's no dot, or if the dot is the first character (e.g., ".bashrc"),
+    // then there's effectively no extension to remove in the typical sense,
+    // or the filename itself is the "extension-less" part.
+    if (lastDotIndex === -1 || lastDotIndex === 0) {
+      return fileName;
+    }
+    return fileName.substring(0, lastDotIndex);
+  }
+
+  public getBasename(filePath: string | undefined | null): string {
+    if (!filePath) {
+      return '';
+    }
+    // Normalize path separators to forward slashes and remove trailing slashes
+    const normalizedPath = filePath.replace(/\\/g, '/').replace(/\/$/, '');
+    const lastSlash = normalizedPath.lastIndexOf('/');
+    return lastSlash === -1 ? normalizedPath : normalizedPath.substring(lastSlash + 1);
+  }
+
 }
