@@ -15,7 +15,7 @@
  */
 
 import {Injectable, inject} from '@angular/core';
-import {HttpClient, HttpHeaders, HttpParams, HttpErrorResponse} from '@angular/common/http';
+import {HttpClient, HttpHeaders, HttpParams} from '@angular/common/http';
 import {Observable, throwError, of, from, forkJoin} from 'rxjs';
 import {switchMap, catchError, map, tap, mergeMap} from 'rxjs/operators';
 import {ImsccFile, DriveFile, Material} from '../../interfaces/classroom-interface';
@@ -375,10 +375,10 @@ export class QtiToFormsService {
             }
           }
         });
-        // MODIFIED: Call the async version of _buildFormRequestsFromIntermediate
+
         return this._buildFormRequestsFromIntermediate(intermediateItems, driveFileMap);
       }),
-      map(formRequests => { // ADDED: This map is to re-assign correct indices after forkJoin resolves all items
+      map(formRequests => {
         return formRequests.map((req, idx) => {
           if (req.createItem && req.createItem.location) {
             req.createItem.location.index = idx;
@@ -386,7 +386,7 @@ export class QtiToFormsService {
           return req;
         });
       }),
-      catchError(uploadOrBuildError => { // MODIFIED: Enhanced catchError
+      catchError(uploadOrBuildError => {
         console.error('[QTI Service] Image upload or form request building process failed overall:', uploadOrBuildError);
         console.warn('[QTI Service] Attempting to build form requests without any uploaded/resolved images due to previous error.');
         return this._buildFormRequestsFromIntermediate(intermediateItems, new Map()).pipe(
@@ -609,7 +609,7 @@ export class QtiToFormsService {
     itemElements.forEach((itemElement, index) => {
       const itemIdent = itemElement.getAttribute('ident') || itemElement.getAttribute('identifier');
       const itemLabel = itemElement.getAttribute('label');
-    // console.log(`[QTI Service] Processing <item> #${index + 1} (ident: ${itemIdent || 'N/A'}, label: ${itemLabel || 'N/A'}).`);
+      // console.log(`[QTI Service] Processing <item> #${index + 1} (ident: ${itemIdent || 'N/A'}, label: ${itemLabel || 'N/A'}).`);
 
       const itemIdentifierForParsing = itemIdent || itemLabel || `item_${index}`;
 
@@ -766,16 +766,16 @@ export class QtiToFormsService {
               const imagePath = this._resolveImagePath(originalImgSrc, sourceFileName);
               if (imagePath) {
                 imageFileToUpload = allPackageFiles.find(f => f.name.toLowerCase() === imagePath.toLowerCase());
-                    if (!imageFileToUpload) console.warn(`   [QTI Standard - Item ${itemIdentifier}] Image (from main material: ${originalImgSrc}, resolved: ${imagePath}) not found in package files.`);
-                  } else {
-                    console.warn(`   [QTI Standard - Item ${itemIdentifier}] Could not resolve image path for src: ${originalImgSrc}`);
-                  }
-                }
+                if (!imageFileToUpload) console.warn(`   [QTI Standard - Item ${itemIdentifier}] Image (from main material: ${originalImgSrc}, resolved: ${imagePath}) not found in package files.`);
+              } else {
+                console.warn(`   [QTI Standard - Item ${itemIdentifier}] Could not resolve image path for src: ${originalImgSrc}`);
+              }
+            }
           }
         }
       }
       if (!questionText && imageFileToUpload && imageAltText && !this.isLikelyFilename(imageAltText)) {
-            questionText = imageAltText;
+        questionText = imageAltText;
       }
     }
 
@@ -1075,38 +1075,38 @@ export class QtiToFormsService {
     let textAccumulator: string[] = [];
 
     function extractText(node: Node) {
-        if (node.nodeType === Node.TEXT_NODE) {
-          textAccumulator.push(node.textContent || '');
-        } else if (node.nodeType === Node.ELEMENT_NODE) {
-          const el = node as Element;
-          const tagName = el.tagName.toLowerCase();
-          // Handle block-level elements or <br> by adding newlines appropriately
-          if (tagName === 'br') {
-            textAccumulator.push('\n');
-          } else if (tagName === 'p' && textAccumulator.length > 0 && !textAccumulator[textAccumulator.length - 1].endsWith('\n\n')) {
-            // Ensure a blank line before a new paragraph if not already there
-            if (textAccumulator.length > 0 && !textAccumulator[textAccumulator.length - 1].endsWith('\n')) {
-              textAccumulator.push('\n'); // Add one newline if previous didn't end with one
-            }
-            textAccumulator.push('\n'); // Add second newline for paragraph break
+      if (node.nodeType === Node.TEXT_NODE) {
+        textAccumulator.push(node.textContent || '');
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        const el = node as Element;
+        const tagName = el.tagName.toLowerCase();
+        // Handle block-level elements or <br> by adding newlines appropriately
+        if (tagName === 'br') {
+          textAccumulator.push('\n');
+        } else if (tagName === 'p' && textAccumulator.length > 0 && !textAccumulator[textAccumulator.length - 1].endsWith('\n\n')) {
+          // Ensure a blank line before a new paragraph if not already there
+          if (textAccumulator.length > 0 && !textAccumulator[textAccumulator.length - 1].endsWith('\n')) {
+            textAccumulator.push('\n'); // Add one newline if previous didn't end with one
           }
+          textAccumulator.push('\n'); // Add second newline for paragraph break
+        }
 
-          // Recursively process child nodes
-          // For <img> tags, if excludeImageAltText is true, they've already been removed.
-          // If false, their alt text (if rendered as text by browser) would be picked up if not handled specially.
-          // However, standard .textContent doesn't include alt text. This custom walk aims for visual text.
-          for (let i = 0; i < el.childNodes.length; i++) {
-            extractText(el.childNodes[i]);
-          }
+        // Recursively process child nodes
+        // For <img> tags, if excludeImageAltText is true, they've already been removed.
+        // If false, their alt text (if rendered as text by browser) would be picked up if not handled specially.
+        // However, standard .textContent doesn't include alt text. This custom walk aims for visual text.
+        for (let i = 0; i < el.childNodes.length; i++) {
+          extractText(el.childNodes[i]);
+        }
 
-          // Add a space after certain block-like elements if text doesn't already end with whitespace/newline
-          // This helps separate words that might be joined if tags are immediately consecutive.
-          if (['div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'td', 'th'].includes(tagName)) {
-            if (textAccumulator.length > 0 && !textAccumulator[textAccumulator.length - 1].match(/(\s|\n)$/)) {
-              textAccumulator.push(' ');
-            }
+        // Add a space after certain block-like elements if text doesn't already end with whitespace/newline
+        // This helps separate words that might be joined if tags are immediately consecutive.
+        if (['div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'td', 'th'].includes(tagName)) {
+          if (textAccumulator.length > 0 && !textAccumulator[textAccumulator.length - 1].match(/(\s|\n)$/)) {
+            textAccumulator.push(' ');
           }
         }
+      }
     }
 
     extractText(clonedElement);

@@ -30,7 +30,7 @@ export class FileUploadService {
   // Inject dependencies
   private http = inject(HttpClient);
   private utils = inject(UtilitiesService);
-  private auth = inject(AuthService); // Inject AuthService
+  private auth = inject(AuthService);
 
   // Custom property key to store the source identifier HASH
   private readonly APP_PROPERTY_KEY = 'imsccIdentifier';
@@ -128,7 +128,6 @@ export class FileUploadService {
                 return of(foundFile);
               } else {
                 let blobPreparation$: Observable<Blob | null>;
-                // ... (blobPreparation$ logic remains the same) ...
                 if (typeof fileToUpload.file.data === 'string' && fileToUpload.file.data.startsWith('data:')) {
                   blobPreparation$ = from(this.utils.dataUriToBlob(fileToUpload.file.data, fileToUpload.file.mimeType));
                 } else if (fileToUpload.file.data instanceof ArrayBuffer) {

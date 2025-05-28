@@ -16,7 +16,7 @@
 
 import {Injectable} from '@angular/core';
 import {decode as htmlEntitiesDecode} from 'html-entities';
-import {ImsccFile} from '../../../interfaces/classroom-interface'; // Adjust path
+import {ImsccFile} from '../../../interfaces/classroom-interface';
 
 @Injectable({
   providedIn: 'root'
@@ -257,7 +257,6 @@ export class ImsccParsingHelperService {
 
   public isWebLinkXml(file: ImsccFile, xmlDoc?: XMLDocument | null): boolean {
     let docToCheck: XMLDocument | null = xmlDoc || null;
-    const fileName = file?.name || 'unknown file';
     if (!docToCheck) {
       if (!file || !(file.mimeType?.includes('xml')) || typeof file.data !== 'string') { // Looser check for XML mime type
         return false;

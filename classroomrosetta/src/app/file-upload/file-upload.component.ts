@@ -199,7 +199,7 @@ export class FileUploadComponent {
             this.isProcessing = false;
             this.loadingMessage = '';
             this.assignments = [...accumulatedAssignments];
-            console.log('[Orchestrator] Final assignments count after conversion:', this.assignments.length);
+            console.log('[Orchestrator] Final assignments count after conversion:', this.assignments.length, this.assignments);
             this.changeDetectorRef.markForCheck();
           })
         )
@@ -457,7 +457,8 @@ export class FileUploadComponent {
 
         const qtiFileForService: ImsccFile | undefined = item.qtiFile?.[0];
         // Check if a main Doc should be created from the item's HTML description
-        const shouldCreateDocFromDescription = !qtiFileForService && !!item.descriptionForDisplay && item.workType === 'ASSIGNMENT' && !!item.richtext;
+        console.log(item)
+        const shouldCreateDocFromDescription = !qtiFileForService && !!item.descriptionForDisplay && (item.workType === 'ASSIGNMENT' || item.workType === 'SHORT_ANSWER_QUESTION') && !!item.richtext;
 
         // This list will be used by replaceLocalLinksInHtml to understand original file references.
         const allOriginalLocalFilesInfo = (item.localFilesToUpload || []).map(ftu => {
@@ -824,9 +825,14 @@ export class FileUploadComponent {
 
       if (result && !result.error) {
         // Add the primary Google Doc (from HTML description) if it was created
-        if (result.createdDoc?.id && result.createdDoc?.name) {
+        if (result.createdDoc?.id && result.createdDoc?.name && item.workType === 'ASSIGNMENT') {
           updatedItem.materials.push({
             driveFile: {driveFile: {id: result.createdDoc.id, title: result.createdDoc.name}, shareMode: 'STUDENT_COPY'}
+          });
+        }
+        if (result.createdDoc?.id && result.createdDoc?.name && item.workType === 'SHORT_ANSWER_QUESTION') {
+          updatedItem.materials.push({
+            driveFile: {driveFile: {id: result.createdDoc.id, title: result.createdDoc.name}, shareMode: 'VIEW'}
           });
         }
         // Add the Google Form (from QTI) if it was created
