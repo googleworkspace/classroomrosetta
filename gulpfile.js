@@ -457,7 +457,7 @@ const buildAndDeployClient = series(
   updateAngularEnvironments,
   cleanFirebasePublicDirectory, // Uses updated name and targets correct path
   buildClientApp,
-  copyClientOutputToFirebase,   // Uses updated name and targets correct path
+  // copyClientOutputToFirebase,   // Uses updated name and targets correct path
   deployToFirebaseHosting
 );
 exports.buildAndDeployClient = buildAndDeployClient;

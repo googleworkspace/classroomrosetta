@@ -103,7 +103,7 @@ export class ClassroomService {
       return throwError(() => new Error(errorMsg));
     }
     const headers = this.createAuthHeaders(tokenToUse);
-    let params = new HttpParams().set('courseStates', 'ACTIVE').set('pageSize', this.pageSize);
+    let params = new HttpParams().set('courseStates', 'ACTIVE').set('pageSize', this.pageSize).set('teacherId', 'me');
     if (pageToken) {
       params = params.set('pageToken', pageToken);
     }
