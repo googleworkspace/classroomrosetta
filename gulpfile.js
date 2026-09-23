@@ -431,6 +431,7 @@ exports.deployFirebase = deployToFirebaseHosting;
 exports.enableCloudApis = enableGoogleCloudAPIs;
 exports.ensureFirebaseJson = ensureFirebaseJson;
 exports.ensureFirebaseRc = ensureFirebaseRc;
+exports.updateAngularEnvironments = updateAngularEnvironments;
 
 // Apps Script tasks
 exports.claspInit = series(ensureAppsScriptDir, ensureAppScriptManifest, initClaspProject);

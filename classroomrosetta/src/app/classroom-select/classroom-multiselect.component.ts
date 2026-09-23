@@ -52,6 +52,7 @@ export class ClassroomMultiselectComponent implements OnInit, OnDestroy, OnChang
   isLoading = false;
   errorMessage: string | null = null;
   private classroomSubscription: Subscription | null = null;
+  private userSubscription: Subscription | null = null;
 
   constructor() {
     this.authToken = this.auth.getGoogleAccessToken() || '';
@@ -68,6 +69,17 @@ export class ClassroomMultiselectComponent implements OnInit, OnDestroy, OnChang
   }
 
   ngOnInit(): void {
+    this.userSubscription = this.auth.user$.subscribe(user => {
+      this.authToken = this.auth.getGoogleAccessToken() || '';
+      if (this.authToken && this.allClassrooms.length === 0) {
+        this.fetchClassrooms();
+      } else if (!this.authToken) {
+        this.resetState();
+        this.errorMessage = 'Authentication token is required. Login again.';
+        this.cdRef.markForCheck();
+      }
+    });
+
     if (this.authToken && this.allClassrooms.length === 0) {
       this.fetchClassrooms();
     } else if (!this.authToken) {
@@ -80,6 +92,9 @@ export class ClassroomMultiselectComponent implements OnInit, OnDestroy, OnChang
   ngOnDestroy(): void {
     if (this.classroomSubscription) {
       this.classroomSubscription.unsubscribe();
+    }
+    if (this.userSubscription) {
+      this.userSubscription.unsubscribe();
     }
   }
 

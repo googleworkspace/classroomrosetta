@@ -1,5 +1,7 @@
 {
   "projects": {
-    "default": "classroomrosetta"
+    "default": "classroom-converter",
+    "classroomrosetta": "classroomrosetta",
+    "classroom-converter": "classroom-converter"
   }
 }

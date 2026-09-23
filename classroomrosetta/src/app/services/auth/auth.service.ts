@@ -17,16 +17,19 @@
 import {Injectable, inject, OnDestroy} from '@angular/core';
 import {
   user, // Observable stream of the current user
-  User, // Firebase User interface
   Auth, // Firebase Auth instance
+} from '@angular/fire/auth';
+import {
+  User, // Firebase User interface
   signOut, // Firebase sign out function
   GoogleAuthProvider, // Google Auth provider
   signInWithPopup, // Sign in method
+  browserLocalPersistence, // Local persistence type
   browserSessionPersistence, // Persistence type
   UserCredential, // Type for sign-in result
   setPersistence, // Function to set persistence
   OAuthCredential // Type for OAuth credential
-} from '@angular/fire/auth';
+} from 'firebase/auth';
 import {Observable, Subscription, BehaviorSubject} from 'rxjs';
 
 // Define scopes required for Google APIs
@@ -42,7 +45,7 @@ const SCOPES = [
   "https://www.googleapis.com/auth/script.external_request"
 ];
 
-// Keys for storing Google OAuth Access Token and its expiration time in session storage
+// Keys for storing Google OAuth Access Token and its expiration time in storage
 const GOOGLE_ACCESS_TOKEN_KEY = 'googleOAuthAccessToken';
 const GOOGLE_ACCESS_TOKEN_EXPIRES_AT_KEY = 'googleOAuthAccessTokenExpiresAt';
 
@@ -66,7 +69,7 @@ export class AuthService implements OnDestroy {
   private googleAccessToken: string | null = null;
   // Stores the timestamp (in milliseconds) when the Google OAuth access token expires.
   private googleAccessTokenExpiresAt: number | null = null;
-  // Timer for scheduling proactive token refresh
+  // Timer for scheduling token expiration handling
   private tokenRefreshTimer: any = null;
 
   constructor() {
@@ -74,47 +77,57 @@ export class AuthService implements OnDestroy {
     console.log("AuthService: Injected Auth instance:", this.auth);
 
     try {
-      console.log("AuthService: Attempting setPersistence in constructor...");
+      console.log("AuthService: Setting persistence...");
       if (!this.auth) {
-        console.error("AuthService: Auth instance is null/undefined in constructor before setPersistence call.");
+        console.error("AuthService: Auth instance is null/undefined in constructor.");
       } else {
-        setPersistence(this.auth, browserSessionPersistence)
+        setPersistence(this.auth, browserLocalPersistence)
           .then(() => {
-            console.log("AuthService: Firebase persistence successfully set to session storage in constructor.");
+            console.log("AuthService: Firebase persistence successfully set to browserLocalPersistence.");
           })
           .catch((error) => {
-            console.warn("AuthService: Initial attempt to set persistence in constructor failed (will be re-attempted on sign-in):", error);
-            console.log("AuthService: Auth object state at time of initial persistence warning:", this.auth);
+            console.warn("AuthService: Initial attempt to set browserLocalPersistence failed, trying browserSessionPersistence:", error);
+            setPersistence(this.auth, browserSessionPersistence).catch(err => {
+              console.warn("AuthService: Failed to set browserSessionPersistence:", err);
+            });
           });
       }
     } catch (syncError) {
-      console.error("AuthService: Synchronous error during initial persistence setup in constructor:", syncError);
-      console.log("AuthService: Auth object state at time of sync error:", this.auth);
+      console.error("AuthService: Synchronous error during persistence setup in constructor:", syncError);
     }
 
-    // Attempt to load the Google access token and its expiry from session storage on service initialization
+    // Attempt to load the Google access token and its expiry from storage on service initialization
     this.loadTokenFromStorage();
 
     // Subscribe to Firebase auth state changes
-    this.userSubscription = user(this.auth).subscribe(firebaseUser => {
+    this.userSubscription = user(this.auth).subscribe(async firebaseUser => {
       console.log("AuthService: Firebase Auth state changed:", firebaseUser ? firebaseUser.uid : 'No user');
-      this.userSubject.next(firebaseUser);
 
       if (!firebaseUser) {
         this.clearGoogleToken();
+        this.userSubject.next(null);
         console.log("AuthService: User logged out or Firebase session ended. Cleared Google Access Token and refresh timer.");
       } else {
         if (!this.googleAccessToken) {
           this.loadTokenFromStorage();
         }
 
-        if (this.googleAccessToken && this.googleAccessTokenExpiresAt) {
+        if (this.googleAccessToken && this.googleAccessTokenExpiresAt && !this.isTokenLikelyExpired(0)) {
           console.log("AuthService: Firebase user present and Google Access Token available/loaded.");
+          this.userSubject.next(firebaseUser);
           if (!this.tokenRefreshTimer && Date.now() < this.googleAccessTokenExpiresAt - (TOKEN_REFRESH_BUFFER_SECONDS * 1000)) {
             this.scheduleTokenRefresh();
           }
         } else {
-          console.warn(`AuthService: Firebase user ${firebaseUser.uid} is authenticated, but Google Access Token is missing or expired. Application may need to prompt for Google Sign-In.`);
+          console.warn(`AuthService: Firebase user ${firebaseUser.uid} is authenticated, but Google Access Token is missing or expired. Logging out to prompt for Google Sign-In.`);
+          this.clearGoogleToken();
+          this.userSubject.next(null);
+          try {
+            await signOut(this.auth);
+            console.log("AuthService: Successfully logged out Firebase user due to missing/expired Google Access Token.");
+          } catch (logoutError) {
+            console.error("AuthService: Error during logout for missing/expired token:", logoutError);
+          }
         }
       }
     });
@@ -141,8 +154,17 @@ export class AuthService implements OnDestroy {
 
     console.log("AuthService: Attempting Google Sign-In via popup...");
     try {
-      await setPersistence(this.auth, browserSessionPersistence);
-      console.log("AuthService: Ensured session persistence is set before popup.");
+      try {
+        await setPersistence(this.auth, browserLocalPersistence);
+        console.log("AuthService: Ensured persistence is set before popup.");
+      } catch (pError) {
+        console.warn("AuthService: Could not set browserLocalPersistence before popup, attempting browserSessionPersistence:", pError);
+        try {
+          await setPersistence(this.auth, browserSessionPersistence);
+        } catch (e2) {
+          console.warn("AuthService: Could not set session persistence before popup:", e2);
+        }
+      }
 
       const result: UserCredential = await signInWithPopup(this.auth, provider);
       const firebaseUser = result.user;
@@ -161,6 +183,7 @@ export class AuthService implements OnDestroy {
         this.saveTokenToStorage(this.googleAccessToken, this.googleAccessTokenExpiresAt);
         this.scheduleTokenRefresh(); // Schedule refresh for the new token
         console.log("AuthService: New Google Access Token obtained, stored, and refresh scheduled. Expires at:", new Date(this.googleAccessTokenExpiresAt).toISOString());
+        this.userSubject.next(firebaseUser);
       } else {
         console.warn("AuthService: Could not retrieve Google credential or access token from sign-in result.");
         this.clearGoogleToken();
@@ -178,6 +201,7 @@ export class AuthService implements OnDestroy {
     const currentUserId = this.currentUser?.uid;
     console.log("AuthService: Attempting Firebase Logout for user:", currentUserId ?? 'N/A');
     this.clearGoogleToken();
+    this.userSubject.next(null);
     try {
       await signOut(this.auth);
       console.log("AuthService: Firebase Sign out successful.");
@@ -216,14 +240,25 @@ export class AuthService implements OnDestroy {
       sessionStorage.setItem(GOOGLE_ACCESS_TOKEN_KEY, token);
       sessionStorage.setItem(GOOGLE_ACCESS_TOKEN_EXPIRES_AT_KEY, expiresAt.toString());
     } catch (e) {
-      console.error("AuthService: Failed to save token and/or expiry to session storage.", e);
+      console.warn("AuthService: Failed to save token to sessionStorage", e);
+    }
+    try {
+      localStorage.setItem(GOOGLE_ACCESS_TOKEN_KEY, token);
+      localStorage.setItem(GOOGLE_ACCESS_TOKEN_EXPIRES_AT_KEY, expiresAt.toString());
+    } catch (e) {
+      console.warn("AuthService: Failed to save token to localStorage", e);
     }
   }
 
   private loadTokenFromStorage(): void {
     try {
-      const storedToken = sessionStorage.getItem(GOOGLE_ACCESS_TOKEN_KEY);
-      const storedExpiresAtString = sessionStorage.getItem(GOOGLE_ACCESS_TOKEN_EXPIRES_AT_KEY);
+      let storedToken = sessionStorage.getItem(GOOGLE_ACCESS_TOKEN_KEY);
+      let storedExpiresAtString = sessionStorage.getItem(GOOGLE_ACCESS_TOKEN_EXPIRES_AT_KEY);
+
+      if (!storedToken || !storedExpiresAtString) {
+        storedToken = localStorage.getItem(GOOGLE_ACCESS_TOKEN_KEY);
+        storedExpiresAtString = localStorage.getItem(GOOGLE_ACCESS_TOKEN_EXPIRES_AT_KEY);
+      }
 
       if (storedToken && storedExpiresAtString) {
         this.googleAccessToken = storedToken;
@@ -233,7 +268,7 @@ export class AuthService implements OnDestroy {
           console.warn("AuthService: Loaded Google Access Token from storage is expired. Clearing it.");
           this.clearGoogleToken();
         } else {
-          console.log("AuthService: Google Access Token and expiry loaded from session storage. Expires at:", new Date(this.googleAccessTokenExpiresAt).toISOString());
+          console.log("AuthService: Google Access Token and expiry loaded from storage. Expires at:", new Date(this.googleAccessTokenExpiresAt).toISOString());
           this.scheduleTokenRefresh();
         }
       } else {
@@ -241,7 +276,7 @@ export class AuthService implements OnDestroy {
         this.googleAccessTokenExpiresAt = null;
       }
     } catch (e) {
-      console.error("AuthService: Failed to load token and/or expiry from session storage.", e);
+      console.error("AuthService: Failed to load token and/or expiry from storage.", e);
       this.clearGoogleToken();
     }
   }
@@ -260,11 +295,18 @@ export class AuthService implements OnDestroy {
     try {
       sessionStorage.removeItem(GOOGLE_ACCESS_TOKEN_KEY);
       sessionStorage.removeItem(GOOGLE_ACCESS_TOKEN_EXPIRES_AT_KEY);
-      if (wasPresent) {
-        console.log("AuthService: Google Access Token and expiry cleared from memory and session storage.");
-      }
     } catch (e) {
-      console.error("AuthService: Failed to remove token and/or expiry from session storage.", e);
+      console.warn("AuthService: Failed to remove token from sessionStorage", e);
+    }
+    try {
+      localStorage.removeItem(GOOGLE_ACCESS_TOKEN_KEY);
+      localStorage.removeItem(GOOGLE_ACCESS_TOKEN_EXPIRES_AT_KEY);
+    } catch (e) {
+      console.warn("AuthService: Failed to remove token from localStorage", e);
+    }
+
+    if (wasPresent) {
+      console.log("AuthService: Google Access Token and expiry cleared from memory and storage.");
     }
   }
 
@@ -283,30 +325,28 @@ export class AuthService implements OnDestroy {
 
     if (refreshDelay > 0) {
       this.tokenRefreshTimer = setTimeout(async () => {
-        console.log("AuthService: Proactive refresh timer triggered. Attempting to refresh Google Access Token...");
-        await this.attemptProactiveTokenRefresh();
+        console.log("AuthService: Token expiration timer triggered. Access token is expiring.");
+        await this.handleTokenExpiration();
       }, refreshDelay);
-      console.log(`AuthService: Proactive token refresh scheduled in ${Math.round(refreshDelay / 1000)}s.`);
+      console.log(`AuthService: Token expiration timer scheduled in ${Math.round(refreshDelay / 1000)}s.`);
     } else {
       if (Date.now() >= this.googleAccessTokenExpiresAt) {
-        console.warn("AuthService: Token is already expired. Proactive refresh not scheduled. User re-authentication needed.");
+        console.warn("AuthService: Token is already expired.");
+        this.handleTokenExpiration();
       } else {
-        console.log("AuthService: Token is within the refresh buffer or past its ideal proactive refresh time. Refresh will occur on demand or if user re-signs in.");
+        console.log("AuthService: Token is within the refresh buffer.");
       }
     }
   }
 
-  private async attemptProactiveTokenRefresh(): Promise<void> {
-    console.log("AuthService: Attempting proactive Google Access Token refresh...");
-    if (!this.currentUser) {
-      console.log("AuthService: No Firebase user currently signed in. Skipping proactive refresh.");
-      return;
-    }
+  private async handleTokenExpiration(): Promise<void> {
+    console.warn("AuthService: Google Access Token has expired. Logging out so user can sign in again.");
+    this.clearGoogleToken();
+    this.userSubject.next(null);
     try {
-      await this.signInWithGoogle();
-      console.log("AuthService: Proactive token refresh attempt completed (see signInWithGoogle logs for outcome).");
+      await signOut(this.auth);
     } catch (error) {
-      console.warn("AuthService: Proactive token refresh attempt failed.", error);
+      console.warn("AuthService: Sign-out on token expiration error:", error);
     }
   }
 }
