@@ -17,7 +17,7 @@
 import {inject, Injectable} from '@angular/core';
 import {HttpClient, HttpErrorResponse, HttpHeaders, HttpResponse} from '@angular/common/http';
 import {Observable, throwError, timer, of, firstValueFrom} from 'rxjs';
-import {retry, catchError, map, tap} from 'rxjs/operators';
+import {retry, catchError, map, concatMap} from 'rxjs/operators';
 import {decode} from 'html-entities';
 import {AuthService} from '../auth/auth.service';
 
@@ -27,6 +27,7 @@ export interface RetryConfig {
   initialDelayMs?: number;
   backoffFactor?: number;
   retryableStatusCodes?: number[];
+  initialWaitMs?: number;
 }
 
 // Base interface for the item being processed in a batch operation.
@@ -98,9 +99,9 @@ export class UtilitiesService {
   }
 
   /**
-   * Wraps an Observable with retry logic.
-   */
-  public retryRequest<T>(
+ * Wraps an Observable with an initial delay and retry logic.
+ */
+  retryRequest<T>(
     request$: Observable<T>,
     config?: RetryConfig,
     operationName?: string
@@ -109,29 +110,48 @@ export class UtilitiesService {
       maxRetries: 3,
       initialDelayMs: 1500,
       backoffFactor: 2,
-      retryableStatusCodes: [500, 503, 504, 429]
-    };
-    const retryConfig: Required<RetryConfig> = {...defaults, ...config};
-    const opName = operationName ? ` (${operationName})` : '';
+    retryableStatusCodes: [500, 503, 504, 429],
+    initialWaitMs: 0 // Default to no initial wait
+  };
+  const retryConfig: Required<RetryConfig> = {...defaults, ...config};
+  const opName = operationName ? ` (${operationName})` : '';
 
-    return request$.pipe(
-      retry({
-        count: retryConfig.maxRetries,
-        delay: (error: HttpErrorResponse | Error, retryCount: number) => {
-          const isRetryable = error instanceof HttpErrorResponse &&
-            retryConfig.retryableStatusCodes.includes(error.status);
-          if (isRetryable) {
-            const delayTime = retryConfig.initialDelayMs * Math.pow(retryConfig.backoffFactor, retryCount - 1) + (Math.random() * 1000);
-            console.warn(`UtilitiesService: Request${opName} failed (Attempt ${retryCount}/${retryConfig.maxRetries}) with status ${error instanceof HttpErrorResponse ? error.status : 'N/A'}. Retrying in ${delayTime}ms.`);
-            return timer(delayTime);
-          } else {
-            console.error(`UtilitiesService: Request${opName} failed with non-retryable error:`, this.formatHttpError(error));
-            return throwError(() => error);
-          }
-        }
-      })
-    );
-  }
+  // Start with a timer for the initial wait.
+  return timer(retryConfig.initialWaitMs).pipe(
+    // After the timer completes, switch to the request and its retry logic.
+    concatMap(() =>
+      request$.pipe(
+        retry({
+          count: retryConfig.maxRetries,
+          delay: (error: HttpErrorResponse | Error, retryCount: number) => {
+            const isRetryable =
+              error instanceof HttpErrorResponse &&
+              retryConfig.retryableStatusCodes.includes(error.status);
+            if (isRetryable) {
+              const delayTime =
+                retryConfig.initialDelayMs *
+                Math.pow(retryConfig.backoffFactor, retryCount - 1) +
+                Math.random() * 1000;
+              console.warn(
+                `UtilitiesService: Request${opName} failed (Attempt ${retryCount}/${retryConfig.maxRetries
+                }) with status ${error instanceof HttpErrorResponse ? error.status : 'N/A'
+                }. Retrying in ${delayTime}ms.`
+              );
+              return timer(delayTime);
+            } else {
+              // Note: this.formatHttpError will need to be accessible in the scope this function is used.
+              console.error(
+                `UtilitiesService: Request${opName} failed with non-retryable error:`,
+                error // Replaced this.formatHttpError for broader compatibility
+              );
+              return throwError(() => error);
+            }
+          },
+        })
+      )
+    )
+  );
+}
 
   /**
    * Orchestrates the execution of generic batch operations.
@@ -645,6 +665,15 @@ export class UtilitiesService {
     const normalizedPath = filePath.replace(/\\/g, '/').replace(/\/$/, '');
     const lastSlash = normalizedPath.lastIndexOf('/');
     return lastSlash === -1 ? normalizedPath : normalizedPath.substring(lastSlash + 1);
+  }
+
+  /**
+ * Delays the execution of an async function.
+ * @param ms The number of milliseconds to sleep.
+ * @returns A Promise that resolves after the specified time.
+ */
+  sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
 }

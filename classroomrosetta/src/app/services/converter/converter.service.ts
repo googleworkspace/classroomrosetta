@@ -94,6 +94,7 @@ export class ConverterService {
       return throwError(() => new Error('imsmanifest.xml not found or data is not a string.'));
     }
 
+    let organizationsNode: Element | null = null;
     let organization: Element | null = null;
     let rootItems: Element[] = [];
     let resourcesElement: Element | null = null;
@@ -128,7 +129,7 @@ export class ConverterService {
       this.manifestXmlDoc = doc;
       this.coursename = this.parsingHelper.extractManifestTitle(this.manifestXmlDoc) || 'Untitled Course';
       console.log(`Extracted course name: ${this.coursename}`);
-      const organizationsNode = this.manifestXmlDoc.getElementsByTagNameNS(this.IMSCP_V1P1_NS, 'organizations')[0]
+      organizationsNode = this.manifestXmlDoc.getElementsByTagNameNS(this.IMSCP_V1P1_NS, 'organizations')[0]
         || this.manifestXmlDoc.getElementsByTagName('organizations')[0];
 
       if (organizationsNode) {
@@ -140,18 +141,20 @@ export class ConverterService {
           );
           if (rootItems.length === 0) console.warn('No <item> elements found within the organization.');
         } else console.warn('No <organization> element found within <organizations>.');
-      } else {
-        resourcesElement = this.manifestXmlDoc.getElementsByTagNameNS(this.IMSCP_V1P1_NS, 'resources')[0]
-          || this.manifestXmlDoc.getElementsByTagName('resources')[0];
-        if (resourcesElement) {
-          directResources = Array.from(resourcesElement.children).filter(
-            (node): node is Element => node instanceof Element && node.localName === 'resource'
-          );
-          if (directResources.length === 0) console.warn('Found <resources> element, but it contains no <resource> children.');
-        } else {
-          console.error('Manifest contains neither <organizations> nor <resources> elements. Cannot process.');
-          return throwError(() => new Error('No <organizations> or <resources> found in manifest'));
-        }
+      }
+
+      resourcesElement = this.manifestXmlDoc.getElementsByTagNameNS(this.IMSCP_V1P1_NS, 'resources')[0]
+        || this.manifestXmlDoc.getElementsByTagName('resources')[0];
+      if (resourcesElement) {
+        directResources = Array.from(resourcesElement.children).filter(
+          (node): node is Element => node instanceof Element && node.localName === 'resource'
+        );
+        if (directResources.length === 0) console.warn('Found <resources> element, but it contains no <resource> children.');
+      }
+
+      if (!organizationsNode && !resourcesElement) {
+        console.error('Manifest contains neither <organizations> nor <resources> elements. Cannot process.');
+        return throwError(() => new Error('No <organizations> or <resources> found in manifest'));
       }
     } catch (error) {
       console.error('Error processing IMSCC package manifest:', error);
@@ -159,11 +162,44 @@ export class ConverterService {
       return throwError(() => new Error(`Failed to process IMSCC manifest: ${message}`));
     }
 
-    let processingStream: Observable<ProcessedCourseWork>;
-    if (rootItems.length > 0) {
-      processingStream = this.processImsccItemsStream(rootItems, undefined);
-    } else if (directResources.length > 0) {
-      processingStream = from(directResources).pipe(
+    // Collect all resource identifiers referenced in <organizations> items
+    const referencedResourceIds = new Set<string>();
+    if (organizationsNode) {
+      const allItems = organizationsNode.getElementsByTagName('item');
+      for (let i = 0; i < allItems.length; i++) {
+        const ref = allItems[i].getAttribute('identifierref');
+        if (ref) referencedResourceIds.add(ref);
+      }
+    }
+
+    const hasReferencedModuleItems = referencedResourceIds.size > 0;
+
+    // Filter direct resources that were not referenced by any item in <organizations>
+    const unreferencedResources = directResources.filter(res => {
+      const id = res.getAttribute('identifier');
+      if (id && referencedResourceIds.has(id)) return false;
+
+      // Skip Canvas course settings metadata files
+      const href = res.getAttribute('href')?.replace(/^\//, '');
+      if (href?.startsWith('course_settings/') || id === 'course_settings') return false;
+
+      // Skip standalone web_resources that are raw images (they are assets embedded in HTML)
+      if (href?.startsWith('web_resources/')) {
+        const file = this.fileMap.get(this.getFileMapKey(href));
+        if (file?.mimeType?.startsWith('image/')) return false;
+      }
+
+      return true;
+    });
+
+    const streams: Observable<ProcessedCourseWork>[] = [];
+
+    if (hasReferencedModuleItems && rootItems.length > 0) {
+      streams.push(this.processImsccItemsStream(rootItems, undefined));
+    }
+
+    if (unreferencedResources.length > 0) {
+      const directResourcesStream = from(unreferencedResources).pipe(
         concatMap(resource => {
           try {
             const title = resource.getAttribute('title') || this.parsingHelper.extractTitleFromMetadata(resource) || 'Untitled Resource';
@@ -177,6 +213,12 @@ export class ConverterService {
         }),
         filter((result): result is ProcessedCourseWork => result !== null)
       );
+      streams.push(directResourcesStream);
+    }
+
+    let processingStream: Observable<ProcessedCourseWork>;
+    if (streams.length > 0) {
+      processingStream = concat(...streams);
     } else {
       console.warn('No root items or direct resources found to process. Conversion will yield no results.');
       processingStream = EMPTY;
@@ -276,6 +318,11 @@ export class ConverterService {
     const d2lMaterialType = resource.getAttributeNS(this.D2L_V2P0_NS, 'material_type');
     if (d2lMaterialType === 'orgunitconfig') {
       this.skippedItemLog.push({id: imsccIdentifier, title: finalTitle, reason: 'D2L orgunitconfig'});
+      return of(null);
+    }
+
+    if (resourceHref?.replace(/^\//, '').startsWith('course_settings/') || resourceIdentifier === 'course_settings') {
+      this.skippedItemLog.push({id: imsccIdentifier, title: finalTitle, reason: 'Canvas course settings metadata'});
       return of(null);
     }
 
@@ -406,6 +453,11 @@ export class ConverterService {
       resourceType?.toLowerCase().startsWith('imsdt');
 
 
+    const fileElements = Array.from(resource.children).filter((node): node is Element => node instanceof Element && node.localName === 'file');
+    const isCanvasAssignment = (primaryFileXmlDoc && primaryFileXmlDoc.documentElement?.localName === 'assignment') ||
+      resourceHref?.toLowerCase().endsWith('assignment_settings.xml') ||
+      fileElements.some(f => f.getAttribute('href')?.toLowerCase().endsWith('assignment_settings.xml'));
+
     if (isStandardQti || isD2lQuiz) {
       courseworkBase.workType = 'ASSIGNMENT';
       if (primaryResourceFile && primaryFileXmlDoc) {
@@ -423,6 +475,129 @@ export class ConverterService {
         console.warn(`   Skipping QTI/Assessment resource "${finalTitle}" (ID: ${resourceIdentifier}): No valid primary file found.`);
         this.skippedItemLog.push({id: imsccIdentifier, title: finalTitle, reason: 'QTI/Assessment - No valid primary file'});
         return of(null);
+      }
+    }
+    else if (isCanvasAssignment) {
+      courseworkBase.workType = 'ASSIGNMENT';
+
+      // 1. Locate the HTML body file inside the resource
+      let htmlFile: ImsccFile | null = null;
+      for (const fileEl of fileElements) {
+        const fileHref = fileEl.getAttribute('href');
+        if (fileHref && (fileHref.toLowerCase().endsWith('.html') || fileHref.toLowerCase().endsWith('.htm'))) {
+          const resolvedPath = this.parsingHelper.resolveRelativePath(baseHref, this.parsingHelper.tryDecodeURIComponent(fileHref));
+          if (resolvedPath) {
+            htmlFile = this.fileMap.get(this.getFileMapKey(resolvedPath)) || null;
+          }
+          if (!htmlFile && resolvedPath) {
+            htmlFile = this.fileMap.get(this.getFileMapKey(fileHref)) || null;
+          }
+          if (htmlFile) break;
+        }
+      }
+
+      // Fallback: look in fileMap in the same directory as primaryResourceFile or resourceHref
+      if (!htmlFile) {
+        const refPath = primaryResourceFile?.name || resourceHref || '';
+        const dir = this.parsingHelper.getDirectory(refPath);
+        if (dir) {
+          for (const [, f] of this.fileMap.entries()) {
+            if (this.parsingHelper.getDirectory(f.name) === dir && (f.name.toLowerCase().endsWith('.html') || f.name.toLowerCase().endsWith('.htm'))) {
+              htmlFile = f;
+              break;
+            }
+          }
+        }
+      }
+
+      // 2. Parse assignment_settings.xml for title, points, due dates, workflow state
+      let settingsDoc = primaryFileXmlDoc;
+      if (!settingsDoc) {
+        let settingsFile = primaryResourceFile;
+        if (!settingsFile || !settingsFile.name.toLowerCase().endsWith('.xml')) {
+          const settingsFileEl = fileElements.find(f => f.getAttribute('href')?.toLowerCase().endsWith('assignment_settings.xml'));
+          const settingsHref = settingsFileEl?.getAttribute('href') || resourceHref;
+          if (settingsHref) {
+            const resolvedPath = this.parsingHelper.resolveRelativePath(baseHref, this.parsingHelper.tryDecodeURIComponent(settingsHref));
+            settingsFile = this.fileMap.get(this.getFileMapKey(resolvedPath || settingsHref)) || null;
+          }
+        }
+        if (settingsFile && typeof settingsFile.data === 'string') {
+          try {
+            const parser = new DOMParser();
+            settingsDoc = parser.parseFromString(settingsFile.data, 'application/xml');
+          } catch {
+            settingsDoc = null;
+          }
+        }
+      }
+
+      if (settingsDoc) {
+        const titleEl = settingsDoc.getElementsByTagName('title')[0];
+        const assignmentTitle = titleEl?.textContent?.trim();
+        if (assignmentTitle) {
+          courseworkBase.title = assignmentTitle;
+        }
+
+        const pointsEl = settingsDoc.getElementsByTagName('points_possible')[0];
+        if (pointsEl?.textContent) {
+          const parsedPoints = parseFloat(pointsEl.textContent.trim());
+          if (!isNaN(parsedPoints)) {
+            courseworkBase.maxPoints = parsedPoints;
+          }
+        }
+
+        const dueAtEl = settingsDoc.getElementsByTagName('due_at')[0];
+        if (dueAtEl?.textContent?.trim()) {
+          const dueDate = new Date(dueAtEl.textContent.trim());
+          if (!isNaN(dueDate.getTime())) {
+            courseworkBase.dueDate = {
+              year: dueDate.getUTCFullYear(),
+              month: dueDate.getUTCMonth() + 1,
+              day: dueDate.getUTCDate()
+            };
+            courseworkBase.dueTime = {
+              hours: dueDate.getUTCHours(),
+              minutes: dueDate.getUTCMinutes()
+            };
+          }
+        }
+
+        const workflowStateEl = settingsDoc.getElementsByTagName('workflow_state')[0];
+        const workflowState = workflowStateEl?.textContent?.trim();
+        if (workflowState === 'published') {
+          courseworkBase.state = 'PUBLISHED';
+        }
+      }
+
+      // If title is missing or default, try to extract from HTML title tag
+      if (!courseworkBase.title || courseworkBase.title === 'Untitled Resource') {
+        if (htmlFile && typeof htmlFile.data === 'string') {
+          const titleMatch = htmlFile.data.match(/<title[^>]*>(.*?)<\/title>/i);
+          if (titleMatch && titleMatch[1]) {
+            let extractedTitle = titleMatch[1].trim();
+            extractedTitle = extractedTitle.replace(/^Assignment:\s*/i, '');
+            if (extractedTitle) courseworkBase.title = extractedTitle;
+          }
+        }
+      }
+
+      // 3. Process HTML instructions & attachments
+      if (htmlFile && typeof htmlFile.data === 'string') {
+        const processedHtml = this.processHtmlContent(htmlFile.name, htmlFile.data);
+        courseworkBase.descriptionForDisplay = processedHtml.descriptionForDisplay;
+        courseworkBase.descriptionForClassroom = processedHtml.descriptionForClassroom || `Assignment: ${courseworkBase.title || finalTitle}`;
+        courseworkBase.richtext = processedHtml.richtext;
+        if (processedHtml.referencedFiles?.length) {
+          courseworkBase.localFilesToUpload?.push(...processedHtml.referencedFiles);
+        }
+        courseworkBase.associatedWithDeveloper!.sourceHtmlFile = htmlFile;
+        if (primaryResourceFile) courseworkBase.associatedWithDeveloper!.sourceXmlFile = primaryResourceFile;
+        courseworkBase.convertToGoogleDoc = true;
+      } else {
+        courseworkBase.descriptionForDisplay = `<p>${courseworkBase.title || finalTitle}</p>`;
+        courseworkBase.descriptionForClassroom = courseworkBase.title || finalTitle;
+        courseworkBase.richtext = false;
       }
     }
     else if (primaryResourceFile && primaryFileXmlDoc && this.parsingHelper.isWebLinkXml(primaryResourceFile, primaryFileXmlDoc)) {
@@ -552,6 +727,10 @@ export class ConverterService {
       }
     }
     else if (primaryResourceFile) {
+      if (primaryResourceFile.mimeType?.startsWith('image/')) {
+        this.skippedItemLog.push({id: imsccIdentifier, title: finalTitle, reason: 'Image asset'});
+        return of(null);
+      }
       // General file attachment
       courseworkBase.workType = 'MATERIAL';
       const targetFileName = primaryResourceFile.name.split('/').pop() || primaryResourceFile.name;
@@ -757,6 +936,13 @@ export class ConverterService {
                 file = this.fileMap.get(variantKey) || null;
                 if (file) resolvedPathForLookup = file.name; // Update if found with variant
               }
+            }
+
+            if (!file) {
+              // Canvas exports store $IMS-CC-FILEBASE$ files under web_resources/
+              const webResKey = this.getFileMapKey('web_resources/' + resolvedPathForLookup);
+              file = this.fileMap.get(webResKey) || null;
+              if (file) resolvedPathForLookup = file.name;
             }
           } else { // Resolution from root failed, try using the decoded path part directly
             pathForLogging += ` | Path part resolution from root failed. Trying pathPart as is.`;

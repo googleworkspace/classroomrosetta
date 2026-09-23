@@ -60,7 +60,8 @@ export class ClassroomService {
     maxRetries: 5,
     initialDelayMs: 2000,
     backoffFactor: 2,
-    retryableStatusCodes: [429, 500, 503, 504]
+    retryableStatusCodes: [429, 500, 503, 504],
+    initialWaitMs: 10
   };
 
   constructor() { }
