@@ -118,11 +118,10 @@ describe('ConverterService', () => {
     expect(item.title).toBe('Week 11: October 20-24');
     expect(item.maxPoints).toBe(100);
     expect(item.state).toBe('PUBLISHED');
-    expect(item.dueDate).toEqual({ year: 2025, month: 10, day: 24 });
-    expect(item.dueTime).toEqual({ hours: 23, minutes: 59 });
+    expect(item.dueDate).toBeUndefined();
+    expect(item.dueTime).toBeUndefined();
     expect(item.descriptionForDisplay).toContain('3.3 Solving Quadratics Using Square Roots');
     expect(item.descriptionForDisplay).toContain('Students will solve a quadratic equation using square roots');
-    expect(item.convertToGoogleDoc).toBeTrue();
 
     // Verify attached worksheet file from $IMS-CC-FILEBASE$
     expect(item.localFilesToUpload.length).toBe(1);

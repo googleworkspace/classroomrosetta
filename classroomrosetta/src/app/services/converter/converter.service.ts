@@ -547,21 +547,9 @@ export class ConverterService {
           }
         }
 
-        const dueAtEl = settingsDoc.getElementsByTagName('due_at')[0];
-        if (dueAtEl?.textContent?.trim()) {
-          const dueDate = new Date(dueAtEl.textContent.trim());
-          if (!isNaN(dueDate.getTime())) {
-            courseworkBase.dueDate = {
-              year: dueDate.getUTCFullYear(),
-              month: dueDate.getUTCMonth() + 1,
-              day: dueDate.getUTCDate()
-            };
-            courseworkBase.dueTime = {
-              hours: dueDate.getUTCHours(),
-              minutes: dueDate.getUTCMinutes()
-            };
-          }
-        }
+        // Due dates from exported LMS packages are almost always in the past,
+        // which causes Google Classroom API 400 Bad Request errors ("Due date cannot be in the past").
+        // Therefore, we intentionally do not import due dates or due times.
 
         const workflowStateEl = settingsDoc.getElementsByTagName('workflow_state')[0];
         const workflowState = workflowStateEl?.textContent?.trim();

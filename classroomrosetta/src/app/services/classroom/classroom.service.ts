@@ -277,8 +277,8 @@ export class ClassroomService {
                   maxPoints: effectiveItemForPart.maxPoints,
                   assignment: effectiveItemForPart.workType === 'ASSIGNMENT' ? effectiveItemForPart.assignment : undefined,
                   multipleChoiceQuestion: effectiveItemForPart.workType === 'MULTIPLE_CHOICE_QUESTION' ? effectiveItemForPart.multipleChoiceQuestion : undefined,
-                  dueDate: effectiveItemForPart.dueDate,
-                  dueTime: effectiveItemForPart.dueTime,
+                  dueDate: undefined,
+                  dueTime: undefined,
                   scheduledTime: effectiveItemForPart.scheduledTime,
                   submissionModificationMode: effectiveItemForPart.submissionModificationMode,
                 };
