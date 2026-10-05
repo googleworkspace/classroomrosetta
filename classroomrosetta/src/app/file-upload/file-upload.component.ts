@@ -91,6 +91,7 @@ export class FileUploadComponent {
   isProcessing: boolean = false;
   loadingMessage: string = '';
   errorMessage: string | null = null;
+  warningMessage: string | null = null;
   successMessage: string | null = null;
 
   classroom = inject(ClassroomService);
@@ -118,6 +119,7 @@ export class FileUploadComponent {
     this.unzippedFiles = [];
     this.isProcessing = false;
     this.errorMessage = null;
+    this.warningMessage = null;
     this.successMessage = null;
     this.changeDetectorRef.markForCheck();
   }
@@ -127,6 +129,7 @@ export class FileUploadComponent {
       this.isProcessing = true;
       this.loadingMessage = 'Unzipping file...';
       this.errorMessage = null;
+      this.warningMessage = null;
       this.successMessage = null;
       this.assignments = [];
       this.unzippedFiles = [];
@@ -193,17 +196,20 @@ export class FileUploadComponent {
         .pipe(
           finalize(() => {
             console.log('[Orchestrator] IMSCC conversion stream finalized.');
-            if (!this.isProcessing && !this.errorMessage) {
-              if (accumulatedAssignments.length > 0) {
-                this.successMessage = `Conversion complete. Found ${accumulatedAssignments.length} items. Ready for submission.`;
-              } else {
-                this.errorMessage = `No convertible items found in "${this.selectedFile?.name || 'package'}". The archive does not contain any resources or assignments.`;
-              }
-            }
             this.isProcessing = false;
             this.loadingMessage = '';
             this.assignments = [...accumulatedAssignments];
             console.log('[Orchestrator] Final assignments count after conversion:', this.assignments.length, this.assignments);
+
+            if (!this.errorMessage) {
+              if (accumulatedAssignments.length > 0) {
+                this.successMessage = `Conversion complete. Found ${accumulatedAssignments.length} item${accumulatedAssignments.length === 1 ? '' : 's'}. Ready for submission.`;
+                this.warningMessage = null;
+              } else {
+                this.warningMessage = `No convertible items found in "${this.selectedFile?.name || 'package'}". The archive contains no assignments, quizzes, discussions, or content resources.`;
+                this.successMessage = null;
+              }
+            }
             this.changeDetectorRef.markForCheck();
           })
         )
@@ -282,6 +288,7 @@ export class FileUploadComponent {
     this.isProcessing = true;
     this.loadingMessage = `Processing ${assignmentsReadyForDriveProcessing.length} assignment(s)... (Step 1: Content Preparation)`;
     this.errorMessage = null;
+    this.warningMessage = null;
     this.successMessage = null;
     this.changeDetectorRef.markForCheck();
 

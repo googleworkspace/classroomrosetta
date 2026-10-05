@@ -61,7 +61,7 @@
   color: #333;
 }
 
-.error-message, .success-message, .info-message {
+.error-message, .warning-message, .success-message, .info-message {
   padding: 10px 15px;
   margin: 15px 0;
   border-radius: 4px;
@@ -79,6 +79,21 @@
 .error-message button {
     margin-left: auto;
     color: #721c24;
+}
+
+.warning-message {
+  background-color: #fff3cd; /* Warm light amber */
+  color: #856404; /* Dark amber text */
+  border: 1px solid #ffeeba;
+}
+
+.warning-message .warning-icon {
+  color: #856404;
+}
+
+.warning-message button {
+  margin-left: auto;
+  color: #856404;
 }
 
 .success-message {

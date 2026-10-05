@@ -46,7 +46,17 @@
     </div>
   }
 
-   @if (successMessage && !isProcessing && !errorMessage) {
+  @if (warningMessage) {
+    <div class="warning-message">
+      <mat-icon class="warning-icon">warning_amber</mat-icon>
+      <span>{{ warningMessage }}</span>
+      <button mat-icon-button (click)="warningMessage = null" aria-label="Clear warning message">
+        <mat-icon>close</mat-icon>
+      </button>
+    </div>
+  }
+
+  @if (successMessage && !isProcessing && !errorMessage && !warningMessage) {
     <div class="success-message">
       <mat-icon color="primary">check_circle_outline</mat-icon>
       <span>{{ successMessage }}</span>
