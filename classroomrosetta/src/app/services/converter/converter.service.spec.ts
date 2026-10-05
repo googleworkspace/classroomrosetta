@@ -215,4 +215,37 @@ describe('ConverterService', () => {
     expect(results[1].title).toBe('Unit 2');
     expect(results[1].maxPoints).toBe(20);
   });
+
+  it('should extract course title from CC v1.2 lomimscc metadata and handle empty resources cleanly', async () => {
+    const manifestXml = `<?xml version="1.0" encoding="UTF-8"?>
+<manifest xmlns="http://www.imsglobal.org/xsd/imsccv1p2/imscp_v1p1" identifier="cctd0001" xmlns:lomimscc="http://ltsc.ieee.org/xsd/imsccv1p2/LOM/manifest">
+  <metadata>
+    <schema>IMS Common Cartridge</schema>
+    <schemaversion>1.2.0</schemaversion>
+    <lomimscc:lom>
+      <lomimscc:general>
+        <lomimscc:title>
+          <lomimscc:string>Home</lomimscc:string>
+        </lomimscc:title>
+      </lomimscc:general>
+    </lomimscc:lom>
+  </metadata>
+  <organizations>
+    <organization identifier="org" structure="rooted-hierarchy">
+      <item identifier="root"/>
+    </organization>
+  </organizations>
+  <resources/>
+</manifest>`;
+
+    const files: ImsccFile[] = [
+      { name: 'imsmanifest.xml', data: manifestXml, mimeType: 'text/xml' }
+    ];
+
+    const results: ProcessedCourseWork[] = await firstValueFrom(service.convertImscc(files).pipe(toArray()));
+
+    expect(service.coursename).toBe('Home');
+    expect(results.length).toBe(0);
+  });
 });
+

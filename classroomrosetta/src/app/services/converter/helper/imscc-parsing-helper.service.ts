@@ -134,65 +134,29 @@ export class ImsccParsingHelperService {
 
   public extractTitleFromMetadata(element: Element): string | null {
     try {
-      // Find the metadata element (namespace aware)
-      const metadataElement = element.getElementsByTagNameNS(this.IMSCP_V1P1_NS, 'metadata')[0] || element.getElementsByTagName('metadata')[0];
+      const metadataElement = element.getElementsByTagNameNS(this.IMSCP_V1P1_NS, 'metadata')[0]
+        || element.getElementsByTagName('metadata')[0]
+        || Array.from(element.children).find(el => el.localName === 'metadata');
       if (!metadataElement) return null;
 
-      let lomElement: Element | null = null;
-      let lomNamespace: string | null = null;
-
-      // Try finding LOM element with known namespaces first
-      const namespacesToTry = [this.IMSMD_V1P2_NS, this.LOMIMSCC_V1P3_NS, this.LOMIMSCC_V1P1_NS];
-      for (const ns of namespacesToTry) {
-        lomElement = metadataElement.getElementsByTagNameNS(ns, 'lom')[0] as Element | null;
-        if (lomElement) {
-          lomNamespace = ns;
-          break;
-        }
-      }
-      // Fallback to finding LOM element without specific namespace
-      if (!lomElement) {
-        lomElement = metadataElement.getElementsByTagName('lom')[0] as Element | null;
-        if (lomElement) lomNamespace = '*'; // Indicate generic namespace found
-      }
+      const lomElement = Array.from(metadataElement.getElementsByTagName('*')).find(el => el.localName === 'lom')
+        || (metadataElement.localName === 'lom' ? metadataElement : null);
       if (!lomElement) return null;
 
-      // Find the 'general' element within LOM (namespace aware)
-      let generalElement: Element | null;
-      if (lomNamespace && lomNamespace !== '*') {
-        generalElement = lomElement.getElementsByTagNameNS(lomNamespace!, 'general')[0] as Element | null;
-      } else {
-        generalElement = lomElement.getElementsByTagName('general')[0] as Element | null;
-      }
+      const generalElement = Array.from(lomElement.getElementsByTagName('*')).find(el => el.localName === 'general');
       if (!generalElement) return null;
 
-      // Find the 'title' element within 'general' (namespace aware)
-      let titleElement: Element | null;
-      if (lomNamespace && lomNamespace !== '*') {
-        titleElement = generalElement.getElementsByTagNameNS(lomNamespace!, 'title')[0] as Element | null;
-      } else {
-        titleElement = generalElement.getElementsByTagName('title')[0] as Element | null;
-      }
+      const titleElement = Array.from(generalElement.getElementsByTagName('*')).find(el => el.localName === 'title');
       if (!titleElement) return null;
 
-      // Find the actual title string within 'title' (can be 'langstring' or 'string')
-      let stringElement: Element | null = null;
-      if (lomNamespace === this.IMSMD_V1P2_NS || lomNamespace === '*') { // IMSMD uses langstring
-        stringElement = titleElement.getElementsByTagNameNS(this.IMSMD_V1P2_NS, 'langstring')[0] as Element | null ||
-          titleElement.getElementsByTagName('langstring')[0] as Element | null;
-      }
-      if (!stringElement) { // Try 'string' element as fallback or for other LOM versions
-        stringElement = (lomNamespace && lomNamespace !== '*') ?
-          titleElement.getElementsByTagNameNS(lomNamespace!, 'string')[0] as Element | null :
-          titleElement.getElementsByTagName('string')[0] as Element | null;
+      const stringElement = Array.from(titleElement.getElementsByTagName('*')).find(
+        el => el.localName === 'string' || el.localName === 'langstring'
+      );
+      if (stringElement?.textContent?.trim()) {
+        return stringElement.textContent.trim();
       }
 
-      // If no specific string element, use the text content of the title element itself
-      if (!stringElement) {
-        const directTitle = titleElement.textContent?.trim();
-        return directTitle || null;
-      }
-      return stringElement.textContent?.trim() || null; // Return the text content of the string element
+      return titleElement.textContent?.trim() || null;
     } catch (error) {
       console.error('Error extracting title from resource metadata:', error);
       return null;
@@ -201,54 +165,30 @@ export class ImsccParsingHelperService {
 
   public extractManifestTitle(xmlDoc: XMLDocument): string | null {
     if (!xmlDoc || !xmlDoc.documentElement) return null;
-    // Similar logic to extractTitleFromMetadata, but applied to the root metadata
     try {
-      const metadataElement = xmlDoc.documentElement.getElementsByTagNameNS(this.IMSCP_V1P1_NS, 'metadata')[0] || xmlDoc.documentElement.getElementsByTagName('metadata')[0];
+      const metadataElement = xmlDoc.documentElement.getElementsByTagNameNS(this.IMSCP_V1P1_NS, 'metadata')[0]
+        || xmlDoc.documentElement.getElementsByTagName('metadata')[0]
+        || Array.from(xmlDoc.documentElement.children).find(el => el.localName === 'metadata');
       if (!metadataElement) return null;
 
-      let lomElement: Element | null = null;
-      let lomNamespace: string | null = null;
-
-      const namespacesToTry = [this.IMSMD_V1P2_NS, this.LOMIMSCC_V1P3_NS, this.LOMIMSCC_V1P1_NS];
-      for (const ns of namespacesToTry) {
-        lomElement = metadataElement.getElementsByTagNameNS(ns, 'lom')[0] as Element | null;
-        if (lomElement) {
-          lomNamespace = ns;
-          break;
-        }
-      }
-      if (!lomElement) {
-        lomElement = metadataElement.getElementsByTagName('lom')[0] as Element | null;
-        if (lomElement) lomNamespace = '*';
-      }
+      const lomElement = Array.from(metadataElement.getElementsByTagName('*')).find(el => el.localName === 'lom')
+        || (metadataElement.localName === 'lom' ? metadataElement : null);
       if (!lomElement) return null;
 
-      const generalElement = (lomNamespace && lomNamespace !== '*') ?
-        lomElement.getElementsByTagNameNS(lomNamespace, 'general')[0] as Element | null :
-        lomElement.getElementsByTagName('general')[0] as Element | null;
+      const generalElement = Array.from(lomElement.getElementsByTagName('*')).find(el => el.localName === 'general');
       if (!generalElement) return null;
 
-      const titleElement = (lomNamespace && lomNamespace !== '*') ?
-        generalElement.getElementsByTagNameNS(lomNamespace, 'title')[0] as Element | null :
-        generalElement.getElementsByTagName('title')[0] as Element | null;
+      const titleElement = Array.from(generalElement.getElementsByTagName('*')).find(el => el.localName === 'title');
       if (!titleElement) return null;
 
-      let stringElement: Element | null = null;
-      if (lomNamespace === this.IMSMD_V1P2_NS || lomNamespace === '*') {
-        stringElement = titleElement.getElementsByTagNameNS(this.IMSMD_V1P2_NS, 'langstring')[0] as Element | null ||
-          titleElement.getElementsByTagName('langstring')[0] as Element | null;
-      }
-      if (!stringElement && lomNamespace) {
-        stringElement = (lomNamespace !== '*') ?
-          titleElement.getElementsByTagNameNS(lomNamespace, 'string')[0] as Element | null :
-          titleElement.getElementsByTagName('string')[0] as Element | null;
+      const stringElement = Array.from(titleElement.getElementsByTagName('*')).find(
+        el => el.localName === 'string' || el.localName === 'langstring'
+      );
+      if (stringElement?.textContent?.trim()) {
+        return stringElement.textContent.trim();
       }
 
-      if (!stringElement) {
-        const directTitle = titleElement.textContent?.trim();
-        return directTitle || null;
-      }
-      return stringElement.textContent?.trim() || null;
+      return titleElement.textContent?.trim() || null;
     } catch (error) {
       console.error('An unexpected error occurred during manifest title extraction:', error);
       return null;

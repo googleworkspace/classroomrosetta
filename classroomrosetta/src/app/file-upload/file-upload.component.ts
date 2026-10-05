@@ -194,7 +194,11 @@ export class FileUploadComponent {
           finalize(() => {
             console.log('[Orchestrator] IMSCC conversion stream finalized.');
             if (!this.isProcessing && !this.errorMessage) {
-              this.successMessage = `Conversion complete. Found ${accumulatedAssignments.length} items. Ready for submission.`;
+              if (accumulatedAssignments.length > 0) {
+                this.successMessage = `Conversion complete. Found ${accumulatedAssignments.length} items. Ready for submission.`;
+              } else {
+                this.errorMessage = `No convertible items found in "${this.selectedFile?.name || 'package'}". The archive does not contain any resources or assignments.`;
+              }
             }
             this.isProcessing = false;
             this.loadingMessage = '';
